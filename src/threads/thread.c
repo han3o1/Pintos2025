@@ -264,16 +264,8 @@ thread_unblock (struct thread *t)
 }
 
 /* Function called per timer tick. Check the thread in sleep state, wake up the thread that needs to be woken up. */
-void
-thread_tick(void) {
-  struct thread *t = thread_current();
 
-  /* Check if the thread in sleep should wake up */
-  if (t->status == THREAD_BLOCKED && t->wake_tick <= timer_ticks()) {  // Check the thread in the sleep state
-    thread_unblock(t);  // Unblock when it's time for a thread to wake up in the sleep state
-  }
-}
-
+ 
 /* Returns the name of the running thread. */
 const char *
 thread_name (void) 
