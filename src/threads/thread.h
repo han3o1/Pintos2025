@@ -98,6 +98,7 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
+   int64_t wake_tick; /*the time when the threads wake up*/
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
@@ -118,6 +119,12 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
+
+/*Add functions for sleep*/
+void thread_sleep(int64_t ticks);  //Sleep function
+void thread_unblock(struct thread *t); //Block release function
+void thread_block(void); //Thread block function
+void thread_tick(void);  //Timetic function
 
 struct thread *thread_current (void);
 tid_t thread_tid (void);
