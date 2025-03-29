@@ -90,10 +90,10 @@ struct thread
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
 
-    int64_t wakeup_time;/*I add*/
-
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+
+    int64_t wakeup_tick;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -107,8 +107,6 @@ struct thread
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
-extern struct list sleep_list;/*I add*/
-
 extern bool thread_mlfqs;
 
 void thread_init (void);
@@ -141,5 +139,8 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+void thread_sleep(int64_t wakeup_tick);
+void thread_wakeup(int64_t current_tick);
 
 #endif /* threads/thread.h */
