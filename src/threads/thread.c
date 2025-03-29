@@ -1,4 +1,5 @@
 #include "threads/thread.h"
+#include "devices/timer.h"  // Add header for timer_ticks() use
 #include <debug.h>
 #include <stddef.h>
 #include <random.h>
