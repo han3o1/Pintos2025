@@ -236,6 +236,18 @@ thread_block (void)
    be important: if the caller had disabled interrupts itself,
    it may expect that it can atomically unblock a thread and
    update other data. */
+
+/* Function to put the thread to sleep. Making it sleep as much as the given ticks. */
+void
+thread_sleep(int64_t ticks) {
+  int64_t start = timer_ticks(); // Current timer value
+  struct thread *current = thread_current();  // Threads currently running
+
+  current->wake_tick = start + ticks;  // Set the time for the thread to wake up
+  current->status = THREAD_BLOCKED;    // Change to block state
+  thread_block();  // Block the current thread
+}   
+
 void
 thread_unblock (struct thread *t) 
 {
@@ -248,6 +260,17 @@ thread_unblock (struct thread *t)
   list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
+}
+
+/* Function called per timer tick. Check the thread in sleep state, wake up the thread that needs to be woken up. */
+void
+thread_tick(void) {
+  struct thread *t = thread_current();
+
+  /* Check if the thread in sleep should wake up */
+  if (t->status == THREAD_BLOCKED && t->wake_tick <= timer_ticks()) {  // Check the thread in the sleep state
+    thread_unblock(t);  // Unblock when it's time for a thread to wake up in the sleep state
+  }
 }
 
 /* Returns the name of the running thread. */
