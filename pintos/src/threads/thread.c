@@ -24,6 +24,8 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+static struct list sleep_list;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -92,6 +94,8 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+
+  list_init(&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -226,6 +230,44 @@ thread_block (void)
 
   thread_current ()->status = THREAD_BLOCKED;
   schedule ();
+}
+
+static bool
+wakeup_tick_less(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct thread *t1 = list_entry(a, struct thread, elem);
+  struct thread *t2 = list_entry(b, struct thread, elem);
+  return t1->wakeup_tick < t2->wakeup_tick;
+}
+
+
+void 
+thread_sleep(int64_t wakeup_tick) 
+{
+  struct thread *cur = thread_current();
+  enum intr_level old_level = intr_disable();
+
+  cur->wakeup_tick = wakeup_tick;
+  list_insert_ordered(&sleep_list, &cur->elem, wakeup_tick_less, NULL);
+  thread_block();
+
+  intr_set_level(old_level);
+}
+
+void 
+thread_wakeup(int64_t current_tick) 
+{
+  struct list_elem *e = list_begin(&sleep_list);
+
+  while (e != list_end(&sleep_list)) {
+    struct thread *t = list_entry(e, struct thread, elem);
+    if (t->wakeup_tick <= current_tick) {
+      e = list_remove(e);
+      thread_unblock(t);
+    } else {
+      break;
+    }
+  }
 }
 
 /* Transitions a blocked thread T to the ready-to-run state.
