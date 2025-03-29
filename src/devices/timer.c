@@ -174,17 +174,6 @@ timer_interrupt (struct intr_frame *args UNUSED)
   thread_tick ();
 }
 
-/* timer_sleep function - add thread to sleep queue */
-void timer_sleep(int64_t ticks) {
-  int64_t start = timer_ticks();
-  struct thread *current = thread_current();
-
-  ASSERT (intr_get_level () == INTR_ON);
-
-  current->wake_tick = start + ticks;  // Set the time when a thread will wake up
-  current->status = THREAD_BLOCKED;    // Change to block state
-  thread_block();  // Block the current thread
-}
 
 
 /* Returns true if LOOPS iterations waits for more than one timer
