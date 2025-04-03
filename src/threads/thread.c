@@ -182,7 +182,12 @@ thread_create (const char *name, int priority,
     return TID_ERROR;
 
   /* Initialize thread. */
-  init_thread (t, name, priority);
+  init_thread (t, name, priority); // Set priority of threads
+  t -> priority = priority; 
+
+  /* Concede CPU if the priority of the new thread is higher than the current thread*/
+  if (t->priority > thread_current()->priority) 
+    thread_yield();
   tid = t->tid = allocate_tid ();
 
   /* Prepare thread for first run by initializing its stack.
