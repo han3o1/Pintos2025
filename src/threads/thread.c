@@ -263,7 +263,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, thread_priority_cmp, NULL); //Insert in ready_list in order of high priority
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -606,3 +606,13 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+
+/* Priority comparison function: Ready_list to come with high priority */
+bool thread_priority_cmp(const struct list_elem *a,
+  const struct list_elem *b,
+  void *aux UNUSED) {
+struct thread *t_a = list_entry(a, struct thread, elem);
+struct thread *t_b = list_entry(b, struct thread, elem);
+return t_a->priority > t_b->priority; // So that the high priority comes to the front
+}
