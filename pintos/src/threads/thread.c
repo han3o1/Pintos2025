@@ -213,6 +213,9 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  if (t->priority > thread_current()->priority)
+    thread_yield();
+
   return tid;
 }
 
@@ -287,7 +290,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, thread_priority_cmp, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -358,7 +361,7 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+    list_insert_ordered(&ready_list, &cur->elem, thread_priority_cmp, NULL);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -385,7 +388,16 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  struct thread *cur = thread_current();
+  cur->init_priority = new_priority;
+  refresh_priority();
+
+  if (!list_empty(&ready_list)) {
+    struct thread *top = list_entry(list_front(&ready_list), struct thread, elem);
+    if (cur->priority < top->priority) {
+      thread_yield();
+    }
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -510,6 +522,12 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+
+  t->priority = priority;
+  t->init_priority = priority;
+  t->wait_on_lock = NULL;
+  list_init(&t->donations);
+
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 }
@@ -623,6 +641,60 @@ allocate_tid (void)
 
   return tid;
 }
+
+bool 
+thread_priority_cmp(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
+{
+  const struct thread *t_a = list_entry(a, struct thread, elem);
+  const struct thread *t_b = list_entry(b, struct thread, elem);
+  return t_a->priority > t_b->priority;
+}
+
+void donate_priority(void) {
+  struct thread *cur = thread_current();
+  int depth = 0;
+  struct lock *lock = cur->wait_on_lock;
+
+  while (lock && depth < 8) {
+    if (!lock->holder) break;
+
+    struct thread *holder = lock->holder;
+    if (holder->priority < cur->priority) {
+      holder->priority = cur->priority;
+    }
+
+    cur = holder;
+    lock = holder->wait_on_lock;
+    depth++;
+  }
+}
+
+void remove_with_lock(struct lock *lock) {
+  struct thread *cur = thread_current();
+  struct list_elem *e = list_begin(&cur->donations);
+
+  while (e != list_end(&cur->donations)) {
+    struct thread *t = list_entry(e, struct thread, donation_elem);
+    if (t->wait_on_lock == lock) {
+      e = list_remove(e);
+    } else {
+      e = list_next(e);
+    }
+  }
+}
+
+void refresh_priority(void) {
+  struct thread *cur = thread_current();
+  cur->priority = cur->init_priority;
+
+  if (!list_empty(&cur->donations)) {
+    struct thread *t = list_entry(list_front(&cur->donations), struct thread, donation_elem);
+    if (t->priority > cur->priority) {
+      cur->priority = t->priority;
+    }
+  }
+}
+
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
