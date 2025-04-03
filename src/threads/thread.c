@@ -514,10 +514,13 @@ alloc_frame (struct thread *t, size_t size)
 static struct thread *
 next_thread_to_run (void) 
 {
-  if (list_empty (&ready_list))
+  if (list_empty(&ready_list))
     return idle_thread;
-  else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+
+  /* Modify the existing FIFO format to select the thread with the highest priority in ready_list */
+  struct list_elem *e = list_max(&ready_list, thread_priority_cmp, NULL);
+  list_remove(e);
+  return list_entry(e, struct thread, elem);
 }
 
 /* Completes a thread switch by activating the new thread's page
