@@ -5,6 +5,8 @@
 #include <list.h>
 #include <stdint.h>
 
+typedef int fixed_point_t;
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -100,6 +102,9 @@ struct thread
     struct list_elem elem;              /* List element. */
 
     int64_t wakeup_tick;
+
+    int nice;
+    fixed_point_t recent_cpu;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
