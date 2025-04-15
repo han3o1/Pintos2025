@@ -5,6 +5,8 @@
 #include <list.h>
 #include <stdint.h>
 
+typedef int fixed_point_t;
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -88,15 +90,21 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
+    
+    int init_priority;
+    struct lock *wait_on_lock;
+    struct list donations;
+    struct list_elem donation_elem;
+    
     struct list_elem allelem;           /* List element for all threads list. */
-    int64_t wakeup_tick; /*Alarm clock*/
-    int init_priority; /*Priority Scheduling*/
-    struct lock *wait_on_lock;/*Priority Scheduling*/
-    struct list donations;/*Priority Scheduling*/
-    struct list_elem donation_elem;/*Priority Scheduling*/  
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+
+    int64_t wakeup_tick;
+
+    int nice;
+    fixed_point_t recent_cpu;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -143,10 +151,13 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-/*Priority Scheduling*/
-void refresh_priority(void);
+void thread_sleep(int64_t wakeup_tick);
+void thread_wakeup(int64_t current_tick);
+
+bool thread_priority_cmp(const struct list_elem *a, const struct list_elem *b, void *aux);
+
 void donate_priority(void);
-bool thread_priority_cmp(const struct list_elem *a,
-   const struct list_elem *b,
-   void *aux);
+void remove_with_lock(struct lock *lock);
+void refresh_priority(void);
+
 #endif /* threads/thread.h */
