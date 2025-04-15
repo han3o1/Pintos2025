@@ -7,6 +7,14 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+
+extern struct thread *idle_thread;
+
+void mlfqs_update_priority_all (void);
+void mlfqs_update_recent_cpu_all (void);
+void mlfqs_update_load_avg (void);
+
+int add_mixed (int, int);
   
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -89,11 +97,10 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  int64_t wakeup_tick = timer_ticks () + ticks;
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  thread_sleep (wakeup_tick);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +179,26 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+  thread_wakeup (ticks);
+
+  if (thread_mlfqs) 
+    {
+      struct thread *cur = thread_current ();
+
+      if (cur != idle_thread)
+        cur->recent_cpu = add_mixed (cur->recent_cpu, 1);
+
+      if (ticks % TIMER_FREQ == 0) 
+        { 
+          mlfqs_update_load_avg ();
+          mlfqs_update_recent_cpu_all ();
+        }
+
+      if (ticks % 4 == 0) 
+        { 
+          mlfqs_update_priority_all ();
+        }
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
