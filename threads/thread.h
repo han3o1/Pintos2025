@@ -157,7 +157,6 @@ void thread_wakeup(int64_t current_tick);
 bool thread_priority_cmp(const struct list_elem *a, const struct list_elem *b, void *aux);
 
 void donate_priority(void);
-void remove_with_lock(struct lock *lock);
 void refresh_priority(void);
 
 #endif /* threads/thread.h */
