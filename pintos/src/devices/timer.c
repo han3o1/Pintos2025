@@ -8,6 +8,14 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
   
+extern struct thread *idle_thread; /*MLFQ - timer.c*/
+  
+void mlfqs_update_priority_all (void);
+void mlfqs_update_recent_cpu_all (void);
+void mlfqs_update_load_avg (void);
+  
+int add_mixed (int, int);
+
 /* See [8254] for hardware details of the 8254 timer chip. */
 
 #if TIMER_FREQ < 19
@@ -87,13 +95,14 @@ timer_elapsed (int64_t then)
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void
-timer_sleep (int64_t ticks) 
+timer_sleep(int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  int64_t wakeup_tick = timer_ticks() + ticks; // alarm clock - timer.c
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+ 
+  thread_sleep(wakeup_tick); // alarm clock - timer.c 
+
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,8 +181,28 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
-}
+  thread_wakeup(ticks); // alarm clock - thread.c 
 
+  if(thread_mlfqs) /*MLFQ - timer.c*/
+    {
+     struct thread *cur = thread_current ();
+ 
+     if (cur != idle_thread)
+       cur->recent_cpu = add_mixed (cur->recent_cpu, 1);
+ 
+     if (ticks % TIMER_FREQ == 0) 
+       { 
+         mlfqs_update_load_avg ();
+         mlfqs_update_recent_cpu_all ();
+       }
+ 
+     if (ticks % 4 == 0) 
+       { 
+         mlfqs_update_priority_all ();
+       }
+   }
+  }
+  
 /* Returns true if LOOPS iterations waits for more than one timer
    tick, otherwise false. */
 static bool
@@ -219,19 +248,19 @@ real_time_sleep (int64_t num, int32_t denom)
   */
   int64_t ticks = num * TIMER_FREQ / denom;
 
-  ASSERT (intr_get_level () == INTR_ON);
-  if (ticks > 0)
+  ASSERT(intr_get_level () == INTR_ON);
+  if(ticks > 0)
     {
       /* We're waiting for at least one full timer tick.  Use
          timer_sleep() because it will yield the CPU to other
          processes. */                
-      timer_sleep (ticks); 
+      timer_sleep(ticks); 
     }
   else 
     {
       /* Otherwise, use a busy-wait loop for more accurate
          sub-tick timing. */
-      real_time_delay (num, denom); 
+      real_time_delay(num, denom); 
     }
 }
 
