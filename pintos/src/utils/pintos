@@ -100,7 +100,11 @@ sub parse_command_line {
 	  or exit 1;
     }
 
+<<<<<<< HEAD
     $sim = "qemu" if !defined $sim;
+=======
+    $sim = "qemu-system-i386" if !defined $sim;
+>>>>>>> main
     $debug = "none" if !defined $debug;
     $vga = exists ($ENV{DISPLAY}) ? "window" : "none" if !defined $vga;
 
