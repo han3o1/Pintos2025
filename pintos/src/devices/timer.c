@@ -204,6 +204,8 @@ timer_interrupt (struct intr_frame *args UNUSED)
           mlfqs_update_load_avg ();
           /* Recalculate recent_cpu for all threads using load_avg. */
           mlfqs_update_recent_cpu_all ();
+          /* Recalculate priority for all threads.*/
+          mlfqs_update_priority_all ();
         }
 
       /* Every 4 ticks, recalculate priorities of all threads based on recent_cpu and nice. */
