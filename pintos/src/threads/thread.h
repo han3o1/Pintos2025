@@ -5,11 +5,9 @@
 #include <list.h>
 #include <stdint.h>
 
-<<<<<<< HEAD
-typedef int fixed_point_t;
-=======
-typedef int fixed_point_t; /*MLFQ - thread.h*/
->>>>>>> main
+/*MLFQ - Type for fixed-point arithmetic (used in MLFQ calculations)*/
+typedef int fixed_point_t; 
+
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -93,36 +91,27 @@ struct thread
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
-<<<<<<< HEAD
-    int priority;                       /* Priority. */
-    int init_priority;
-    struct lock *wait_on_lock;
-    struct list donations;
-    struct list_elem donation_elem;
-=======
+
     int priority;                      /* Priority. */
 
-    int init_priority; /*priority scheduling - thread.h*/
-    struct lock *wait_on_lock;
-    struct list donations;
-    struct list_elem donation_elem;
+    /*Priority Scheduling - Priority donation support*/
+    int init_priority;   // Original (non-donated) priority of the thread
+    struct lock *wait_on_lock;  // Lock the thread is currently waiting on
+    struct list donations;  // List of threads that have donated their priority
+    struct list_elem donation_elem;  // List element for the donation list
 
->>>>>>> main
+
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
-<<<<<<< HEAD
-    int64_t wakeup_tick;
+    int64_t wakeup_tick; /*alarm clock - 
+    Tick at which the thread should be woken up (for alarm clock).*/
 
-    int nice;
-=======
-    int64_t wakeup_tick; // alarm clock - thread.h
 
-    int nice; /*MLFQ - thread.h */
->>>>>>> main
-    fixed_point_t recent_cpu;
+    int nice; /*MLFQ - Nice value of the thread (affects priority in MLFQ)*/
+    fixed_point_t recent_cpu; /*MLFQ - Estimated CPU usage (used for priority calculation)*/
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -169,25 +158,25 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-<<<<<<< HEAD
-void thread_sleep (int64_t wakeup_tick);
-void thread_wakeup (int64_t current_tick);
+void thread_sleep(int64_t wakeup_tick); 
+/*alarm clock - 
+Puts the current thread to sleep until wakeup_tick.*/
 
-bool thread_priority_cmp (const struct list_elem *a, const struct list_elem *b, void *aux);
+void thread_wakeup(int64_t current_tick); 
+/*alarm clock - 
+Wakes up all threads whose wakeup_tick <= current_tick.*/
  
-void donate_priority (void);
-void refresh_priority (void);
+/* Priority Scheduling - Helper functions */
+bool thread_priority_cmp(const struct list_elem *a, const struct list_elem *b, void *aux); 
+// Compares two threads' priorities (used to sort ready and waiters list)
+ 
+void donate_priority(void); 
+// Donates the current thread's priority to lock holders if needed
+void remove_with_lock(struct lock *lock); 
+// Removes donations related to a specific lock after it is released
+void refresh_priority(void); 
+// Restores the thread's priority from init_priority, considering remaining donations
+
 
 #endif /* threads/thread.h */
-=======
-void thread_sleep(int64_t wakeup_tick); //alarm clock - thread.h
-void thread_wakeup(int64_t current_tick); // alarm clock - thread.h
- 
-bool thread_priority_cmp(const struct list_elem *a, const struct list_elem *b, void *aux); /*priority scheduling - thread.h*/
- 
-void donate_priority(void);
-void remove_with_lock(struct lock *lock);
-void refresh_priority(void);
 
-#endif /* threads/thread.h */
->>>>>>> main

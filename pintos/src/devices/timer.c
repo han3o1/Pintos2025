@@ -8,12 +8,15 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 
-extern struct thread *idle_thread;
+extern struct thread *idle_thread; /*MLFQ - 
+External reference to the idle thread, needed for recent_cpu updates. */
 
+/* MLFQ - MLFQ-related functions to update load_avg, recent_cpu, and priorities. */
 void mlfqs_update_priority_all (void);
 void mlfqs_update_recent_cpu_all (void);
 void mlfqs_update_load_avg (void);
 
+/*MLFQ - Fixed-point arithmetic helper for recent_cpu calculation.*/
 int add_mixed (int, int);
   
 extern struct thread *idle_thread; /*MLFQ - timer.c*/
@@ -105,19 +108,14 @@ timer_elapsed (int64_t then)
 void
 timer_sleep(int64_t ticks) 
 {
-<<<<<<< HEAD
-  int64_t wakeup_tick = timer_ticks () + ticks;
 
-  ASSERT (intr_get_level () == INTR_ON);
-  thread_sleep (wakeup_tick);
-=======
-  int64_t wakeup_tick = timer_ticks() + ticks; // alarm clock - timer.c
+  int64_t wakeup_tick = timer_ticks() + ticks; 
+  /*alarm clock - Calculate the tick to wake up at*/
 
   ASSERT (intr_get_level () == INTR_ON);
  
-  thread_sleep(wakeup_tick); // alarm clock - timer.c 
+  thread_sleep(wakeup_tick); /*alarm clock - Sleep until that tick*/
 
->>>>>>> main
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -196,45 +194,31 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
-<<<<<<< HEAD
-  thread_wakeup (ticks);
+  thread_wakeup (ticks); /*alarm clock - 
+  Wake up any sleeping threads whose wakeup_tick <= current tick.*/
 
+  /*MLFQ - 
+  If using MLFQ scheduling, perform periodic updates 
+  for CPU usage and priorities.*/
   if (thread_mlfqs) 
     {
-      struct thread *cur = thread_current ();
-
-      if (cur != idle_thread)
-        cur->recent_cpu = add_mixed (cur->recent_cpu, 1);
-
-      if (ticks % TIMER_FREQ == 0) 
-        { 
-          mlfqs_update_load_avg ();
-          mlfqs_update_recent_cpu_all ();
-        }
-
-      if (ticks % 4 == 0) 
-        { 
-          mlfqs_update_priority_all ();
-        }
-  }
-}
-=======
-  thread_wakeup(ticks); // alarm clock - thread.c 
->>>>>>> main
-
-  if(thread_mlfqs) /*MLFQ - timer.c*/
-    {
      struct thread *cur = thread_current ();
- 
+     
+     /* Increase recent_cpu of the running thread by 1 on every tick, 
+     excluding the idle thread. */
      if (cur != idle_thread)
        cur->recent_cpu = add_mixed (cur->recent_cpu, 1);
- 
+     
+     /* Every second (TIMER_FREQ ticks), 
+     update load_avg and each thread's recent_cpu. */  
      if (ticks % TIMER_FREQ == 0) 
        { 
-         mlfqs_update_load_avg ();
-         mlfqs_update_recent_cpu_all ();
+         mlfqs_update_load_avg (); /* Recalculate system load average based on running threads. */
+         mlfqs_update_recent_cpu_all (); /* Recalculate recent_cpu for all threads using load_avg. */
        }
- 
+     
+     /* Every 4 ticks, 
+     recalculate priorities of all threads based on recent_cpu and nice. */  
      if (ticks % 4 == 0) 
        { 
          mlfqs_update_priority_all ();
