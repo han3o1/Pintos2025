@@ -8,12 +8,15 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 
+/*MLFQ - External reference to the idle thread, needed for recent_cpu updates. */
 extern struct thread *idle_thread;
 
+/* MLFQ - MLFQ-related functions to update load_avg, recent_cpu, and priorities. */
 void mlfqs_update_priority_all (void);
 void mlfqs_update_recent_cpu_all (void);
 void mlfqs_update_load_avg (void);
 
+/* MLFQ - Fixed-point arithmetic helper for recent_cpu calculation. */
 int add_mixed (int, int);
   
 /* See [8254] for hardware details of the 8254 timer chip. */
@@ -97,9 +100,11 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
+  /* alarm clock - Calculate the tick to wake up at */
   int64_t wakeup_tick = timer_ticks () + ticks;
 
   ASSERT (intr_get_level () == INTR_ON);
+  /* alarm clock - Sleep until that tick */
   thread_sleep (wakeup_tick);
 }
 
@@ -179,21 +184,29 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+  /* alarm clock - Wake up any sleeping threads whose wakeup_tick <= current tick. */
   thread_wakeup (ticks);
 
+  /* MLFQ - If using MLFQ scheduling, perform periodic updates 
+   for CPU usage and priorities. */
   if (thread_mlfqs) 
     {
       struct thread *cur = thread_current ();
 
+      /* Increase recent_cpu of the running thread by 1 on every tick, excluding the idle thread. */
       if (cur != idle_thread)
         cur->recent_cpu = add_mixed (cur->recent_cpu, 1);
 
+      /* Every second (TIMER_FREQ ticks), update load_avg and each thread's recent_cpu. */  
       if (ticks % TIMER_FREQ == 0) 
         { 
+          /* Recalculate system load average based on running threads. */
           mlfqs_update_load_avg ();
+          /* Recalculate recent_cpu for all threads using load_avg. */
           mlfqs_update_recent_cpu_all ();
         }
 
+      /* Every 4 ticks, recalculate priorities of all threads based on recent_cpu and nice. */
       if (ticks % 4 == 0) 
         { 
           mlfqs_update_priority_all ();

@@ -32,6 +32,7 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+/* priority scheduling - Comparison function to order threads by priority (used in condition variable waiters). */
 static bool cond_sema_priority_cmp (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
@@ -70,6 +71,7 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
+      /* priority scheduling - Insert current thread into the waiters list in descending priority order. */
       list_insert_ordered (&sema->waiters, &thread_current ()->elem,       
                            thread_priority_cmp, NULL);
       thread_block ();
@@ -116,6 +118,7 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
+  /* priority scheduling - If there are waiting threads, sort them by priority and unblock the one with the highest priority. */
   if (!list_empty (&sema->waiters)) 
     {
       list_sort (&sema->waiters, thread_priority_cmp, NULL);
@@ -124,6 +127,7 @@ sema_up (struct semaphore *sema)
     }
   sema->value++;
 
+  /* priority scheduling - If not in interrupt context, yield the CPU if a higher-priority thread was unblocked. */
   if (!intr_context ())
     thread_yield ();
 
@@ -206,6 +210,7 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  /* priority scheduling - If the lock is already held and not using MLFQS, donate the current thread's priority to the lock holder. */
   if (lock->holder != NULL && !thread_mlfqs) 
     {
       thread_current ()->wait_on_lock = lock;
@@ -215,10 +220,13 @@ lock_acquire (struct lock *lock)
       donate_priority ();
     }  
 
+  /* MLFQ - When thread_mlfqs is true, allocate the lock to the current thread and perform semaphore down */
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
 
+  /* priority scheduling - After acquiring the lock, clear wait_on_lock if not using MLFQS */
   if (!thread_mlfqs)
+    /* End Priority Donations: Initialize Long-awaited Rock Information */
     thread_current ()->wait_on_lock = NULL;
 }
 
@@ -253,23 +261,31 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  /* priority scheduling - Only perform priority donation logic when not using MLFQS */
   if (!thread_mlfqs) 
     {
+      /* Get the current running thread */
       struct thread *cur = thread_current ();
+      /* Start iterating through the list of donated threads */
       struct list_elem *e = list_begin (&cur->donations);
 
       while (e != list_end (&cur->donations)) {
+        /* Get the donor thread from the donation list */
         struct thread *t = list_entry (e, struct thread, donation_elem);
         if (t->wait_on_lock == lock) {
+          /* Remove donation if the donor was waiting for the given lock */
           e = list_remove (e);
         } else {
+          /* Move to the next donation */
           e = list_next (e);
         }
       }
 
+      /* Restore the thread's priority to the highest among remaining donations */
       refresh_priority();
     }
 
+  /* MLFQ - When thread_mlfqs is true perform sema_up */
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
@@ -292,6 +308,7 @@ struct semaphore_elem
     struct semaphore semaphore;         /* This semaphore. */
   };
 
+/* priority scheduling - Compares two condition variable waiters by the priority of their highest-priority waiting threads. Used for sorting condition waiters. */
 static bool
 cond_sema_priority_cmp (const struct list_elem *a, 
                         const struct list_elem *b, 
@@ -300,14 +317,17 @@ cond_sema_priority_cmp (const struct list_elem *a,
   struct semaphore_elem *sa = list_entry (a, struct semaphore_elem, elem);
   struct semaphore_elem *sb = list_entry (b, struct semaphore_elem, elem);
   
+  /* If one of the semaphore waiters is empty, give priority to the other */
   if (list_empty (&sa->semaphore.waiters)) return false;
   if (list_empty (&sb->semaphore.waiters)) return true;
   
+  /* Get the front thread (highest-priority waiter) for each semaphore */
   struct thread *ta = list_entry (list_front (&sa->semaphore.waiters), 
                                   struct thread, elem);
   struct thread *tb = list_entry (list_front (&sb->semaphore.waiters), 
                                   struct thread, elem);
     
+  /* Return true if a's thread has higher priority than b's */
   return ta->priority > tb->priority;
 }
 
@@ -353,6 +373,7 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
+  /* priority scheduling - Insert the waiter into the condition's waiters list in priority order, using cond_sema_priority_cmp to compare the highest-priority thread in each semaphore. */
   list_insert_ordered (&cond->waiters, &waiter.elem, 
                        cond_sema_priority_cmp, NULL);
   lock_release (lock);
@@ -375,6 +396,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
+  /* priority scheduling - Sort the condition's waiters by priority before waking one up. Ensures the highest-priority thread is signaled first. */
   if (!list_empty (&cond->waiters))
     {
       list_sort (&cond->waiters, cond_sema_priority_cmp, NULL);
