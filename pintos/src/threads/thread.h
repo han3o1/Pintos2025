@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 
+/* MLFQ - Type for fixed-point arithmetic (used in MLFQ calculations) */
 typedef int fixed_point_t;
 
 /* States in a thread's life cycle. */
@@ -90,19 +91,21 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    int init_priority;
-    struct lock *wait_on_lock;
-    struct list donations;
-    struct list_elem donation_elem;
+    /* priority scheduling - Priority donation support */
+    int init_priority; // Original (non-donated) priority of the thread
+    struct lock *wait_on_lock; // Lock the thread is currently waiting on
+    struct list donations; // List of threads that have donated their priority
+    struct list_elem donation_elem; // List element for the donation list
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+    /* alarm clock - Tick at which the thread should be woken up (for alarm clock). */
     int64_t wakeup_tick;
 
-    int nice;
-    fixed_point_t recent_cpu;
+    int nice; /* MLFQ - Nice value of the thread (affects priority in MLFQ) */
+    fixed_point_t recent_cpu; /* MLFQ - Estimated CPU usage (used for priority calculation) */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -149,12 +152,17 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
+/* alarm clock - Puts the current thread to sleep until wakeup_tick. */
 void thread_sleep (int64_t wakeup_tick);
+/* alarm clock - Wakes up all threads whose wakeup_tick <= current_tick. */
 void thread_wakeup (int64_t current_tick);
 
+/* priority scheduling - Compares two threads' priorities (used to sort ready and waiters list) */
 bool thread_priority_cmp (const struct list_elem *a, const struct list_elem *b, void *aux);
  
+/* Donates the current thread's priority to lock holders if needed */
 void donate_priority (void);
+/* Restores the thread's priority from init_priority, considering remaining donations */
 void refresh_priority (void);
 
 #endif /* threads/thread.h */
