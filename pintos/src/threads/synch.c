@@ -32,6 +32,9 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+extern bool threading_started;
+
+/* priority scheduling - Comparison function to order threads by priority (used in condition variable waiters). */
 static bool cond_sema_priority_cmp (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
@@ -272,6 +275,11 @@ lock_release (struct lock *lock)
 
   lock->holder = NULL;
   sema_up (&lock->semaphore);
+
+  /* Yield only if scheduler is ready */
+  if (!thread_mlfqs && threading_started) {
+    thread_yield();
+  }
 }
 
 /* Returns true if the current thread holds LOCK, false

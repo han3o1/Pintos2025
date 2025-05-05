@@ -94,6 +94,9 @@ void mlfqs_update_recent_cpu_all (void);
 void mlfqs_update_priority_all (void);
 void mlfqs_update_load_avg (void);
 
+/* Global flag to prevent early scheduling before thread_start() */
+bool threading_started = false;
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -132,6 +135,7 @@ thread_start (void)
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
+  threading_started = true;
   thread_create ("idle", PRI_MIN, idle, &idle_started);
 
   /* Start preemptive thread scheduling. */
@@ -251,6 +255,9 @@ thread_create (const char *name, int priority,
 void
 thread_block (void) 
 {
+  if (!threading_started)
+    return;
+  
   ASSERT (!intr_context ());
   ASSERT (intr_get_level () == INTR_OFF);
 
@@ -377,6 +384,9 @@ thread_exit (void)
 void
 thread_yield (void) 
 {
+  if (!threading_started)
+    return;
+  
   struct thread *cur = thread_current ();
   enum intr_level old_level;
   

@@ -20,6 +20,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static void argument_stack(char **argv, int argc, void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -28,7 +29,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *fn_copy, *file_name_copy;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -38,10 +39,23 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  file_name_copy = palloc_get_page (0);
+  if (file_name_copy == NULL)
+  {
+    palloc_free_page(fn_copy);
+    return TID_ERROR;
+  }
+  strlcpy (file_name_copy, file_name, PGSIZE);
+
+  /* Parse the executable name only */
+  char *save_ptr;
+  char *exec_name = strtok_r(file_name_copy, " ", &save_ptr);
+
+  /* Create a new thread to execute EXEC_NAME. */
+  tid = thread_create (exec_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
+  palloc_free_page (file_name_copy);
   return tid;
 }
 
@@ -51,15 +65,36 @@ static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
+  char *token, *save_ptr;
+  char *argv[64]; // 최대 64개의 인자 가정
+  int argc = 0;
+
   struct intr_frame if_;
   bool success;
+
+  /* Tokenize file_name into argv[] */
+  for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
+       token = strtok_r(NULL, " ", &save_ptr))
+  {
+    argv[argc++] = token;
+  }
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+
+  success = load (argv[0], &if_.eip, &if_.esp);
+
+  printf("[DEBUG] load() returned: %s\n", success ? "true" : "false");
+
+  /* If load succeeded, set up argument stack. */
+  if (success) {
+    argument_stack(argv, argc, &if_.esp);
+    printf("[DEBUG] Stack dump after argument_stack:\n");
+    hex_dump((uintptr_t) if_.esp, if_.esp, (size_t)((uintptr_t)PHYS_BASE - (uintptr_t)if_.esp), true);
+  }
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -462,4 +497,49 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+static void
+argument_stack(char **argv, int argc, void **esp)
+{
+  char *arg_addr[64]; // 각 인자의 주소 저장용
+  int i;
+
+  // 인자를 역순으로 스택에 push (문자열 복사)
+  for (i = argc - 1; i >= 0; i--) {
+    size_t len = strlen(argv[i]) + 1;
+    *esp -= len;
+    memcpy(*esp, argv[i], len);
+    arg_addr[i] = *esp;
+  }
+
+  // Word align: 4의 배수로 정렬
+  uintptr_t esp_align = (uintptr_t)(*esp) % 4;
+  if (esp_align) {
+    *esp -= esp_align;
+    memset(*esp, 0, esp_align);
+  }
+
+  // NULL sentinel
+  *esp -= sizeof(char *);
+  *(char **)(*esp) = NULL;
+
+  // argv[i] 주소를 역순으로 push
+  for (i = argc - 1; i >= 0; i--) {
+    *esp -= sizeof(char *);
+    *(char **)(*esp) = arg_addr[i];
+  }
+
+  // argv 주소 저장
+  char **argv_addr = (char **)*esp;
+  *esp -= sizeof(char **);
+  *(char ***)(*esp) = argv_addr;
+
+  // argc push
+  *esp -= sizeof(int);
+  *(int *)(*esp) = argc;
+
+  // fake return address
+  *esp -= sizeof(void *);
+  *(void **)(*esp) = NULL;
 }
