@@ -1,3 +1,4 @@
+#include "threads/synch.h"
 #include "filesys/filesys.h"
 #include <debug.h>
 #include <stdio.h>
@@ -11,6 +12,8 @@
 struct block *fs_device;
 
 static void do_format (void);
+/* Lock used to synchronize file system operations. */
+struct lock fs_lock;
 
 /* Initializes the file system module.
    If FORMAT is true, reformats the file system. */
@@ -23,6 +26,7 @@ filesys_init (bool format)
 
   inode_init ();
   free_map_init ();
+  lock_init(&fs_lock);
 
   if (format) 
     do_format ();
