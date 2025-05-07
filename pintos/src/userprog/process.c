@@ -87,13 +87,11 @@ start_process (void *file_name_)
 
   success = load (argv[0], &if_.eip, &if_.esp);
 
-  printf("[DEBUG] load() returned: %s\n", success ? "true" : "false");
-
   /* If load succeeded, set up argument stack. */
   if (success) {
     argument_stack(argv, argc, &if_.esp);
-    printf("[DEBUG] Stack dump after argument_stack:\n");
-    hex_dump((uintptr_t) if_.esp, if_.esp, (size_t)((uintptr_t)PHYS_BASE - (uintptr_t)if_.esp), true);
+    //hex_dump((uintptr_t) if_.esp, if_.esp, (size_t)((uintptr_t)PHYS_BASE - (uintptr_t)if_.esp), true);
+    hex_dump(if_.esp, if_.esp, PHYS_BASE-if_.esp, true);
   }
 
   /* If load failed, quit. */
@@ -524,8 +522,8 @@ argument_stack(char **argv, int argc, void **esp)
   *esp -= sizeof(char *);
   *(char **)(*esp) = NULL;
 
-  // argv[i] 주소를 역순으로 push
-  for (i = argc - 1; i >= 0; i--) {
+  // argv[i] 주소를 정순으로 push
+  for (i = 0; i < argc; i++) {
     *esp -= sizeof(char *);
     *(char **)(*esp) = arg_addr[i];
   }
