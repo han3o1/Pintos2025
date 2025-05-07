@@ -91,6 +91,7 @@ start_process (void *file_name_)
   if (success) {
     void *user_esp = if_.esp;
     argument_stack(argv, argc, &user_esp);
+    hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
     if_.esp = user_esp;
   }
  
