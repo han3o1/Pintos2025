@@ -396,7 +396,7 @@ thread_exit (void)
    may be scheduled again immediately at the scheduler's whim. */
 void
 thread_yield (void) 
-{
+{  
   struct thread *cur = thread_current ();
   enum intr_level old_level;
   
@@ -582,6 +582,11 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
+
+  int i;
+  for (i = 0; i < FD_MAX; i++) {
+    t->fd_table[i] = NULL;
+  }
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
