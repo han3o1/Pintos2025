@@ -20,7 +20,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void argument_pushing(char **parse, int cnt, void **esp);
+void argument_stack(const char* argv[], int argc, void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -82,12 +82,7 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-  argument_pushing(&tmp, cnt, &if_.esp); // pushing arguments into stack
-
-  // DEBUG
-#ifdef DEBUG
-  hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
-#endif
+  argument_stack((const char **)tmp, cnt, &if_.esp); // pushing arguments into stack
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -119,9 +114,11 @@ process_wait (tid_t child_tid UNUSED)
   // TODO : this is unimplemented version yet,
   // but process_wait should block the process for a while
   // to prevent the pintos kernel from shutting down.
-  int dummy = 0, i;
-  for(i=0; i<7 * 10000 * 10000; ++i) dummy += i;
-  ASSERT(dummy != 0);
+  volatile int i;
+  for (i = 0; i < 1000000000; i++)
+  {
+    
+  }
 
   return -1;
 }
@@ -459,21 +456,21 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
-static void
-argument_pushing (char** parse, int argc, void **esp)
+void
+argument_stack(const char* argv[], int argc, void **esp)
 {
   int i;
-  int len=0;
+  int len = 0;
   int argv_addr[argc];
   for (i = 0; i < argc; i++) {
-    len = strlen(parse[i]) + 1;
+    len = strlen(argv[i]) + 1;
     *esp -= len;
-    memcpy(*esp, parse[i], len);
-    argv_addr[i] = (int) *esp;
+    memcpy(*esp, argv[i], len);
+    argv_addr[i] = (int)*esp;
   }
 
   // word align
-  *esp = (int)*esp & 0xfffffffc;
+  *esp = (void *)((int)*esp & 0xfffffffc);
 
   // last null
   *esp -= 4;
@@ -485,20 +482,18 @@ argument_pushing (char** parse, int argc, void **esp)
     *(int*)*esp = argv_addr[i];
   }
 
-  //setting **argv
+  // setting **argv
   *esp -= 4;
   *(int*)*esp = (int)*esp + 4;
 
-  //setting argc
+  // setting argc
   *esp -= 4;
   *(int*)*esp = argc;
 
-  //setting ret
-  *esp-=4;
+  // setting ret
+  *esp -= 4;
   *(int*)*esp = 0;
-
 }
-
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
