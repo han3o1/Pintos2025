@@ -110,6 +110,14 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    
+    struct process_control_block *pcb;  /* Process Control Block */
+
+    struct list child_list;             /* List of children processes of this thread, each elem is defined by pcb#elem */
+
+    struct list file_descriptors;       /* List of file_descriptors the thread contains */
+
+    struct file *executing_file;        /* The executable file of associated process. */
 #endif
 
     /* Owned by thread.c. */

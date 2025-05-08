@@ -134,6 +134,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  initial_thread->wakeup_tick = 0; // a dummy value
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -207,7 +208,7 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
-  enum intr_level old_level;
+  //enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -223,7 +224,7 @@ thread_create (const char *name, int priority,
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
      member cannot be observed. */
-  old_level = intr_disable ();
+  //old_level = intr_disable ();
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -240,14 +241,14 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-  intr_set_level (old_level);
+  //intr_set_level (old_level);
 
   /* Add to run queue. */
   thread_unblock (t);
 
   /* MLFQ - If using MLFQ, calculate and assign the initial priority for the new thread. */
-  if (thread_mlfqs)
-    mlfqs_update_priority(t, NULL);
+  //if (thread_mlfqs)
+  //  mlfqs_update_priority(t, NULL);
 
   /* priority scheduling - If the unblocked thread has higher priority than the current thread, yield the CPU to allow preemption. */
   if (t->priority > thread_current ()->priority)
@@ -381,6 +382,15 @@ thread_exit (void)
 #ifdef USERPROG
   process_exit ();
 #endif
+
+  struct thread *curr = thread_current();
+
+  // release all locks
+  struct list_elem *e;
+  for (e = list_begin (&curr->donations); e != list_end (&curr->donations); e = list_next (e)) {
+    struct lock *lock = list_entry(e, struct lock, lockelem);
+    lock_release(lock);
+  }
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
@@ -579,6 +589,8 @@ is_thread (struct thread *t)
 static void
 init_thread (struct thread *t, const char *name, int priority)
 {
+  enum intr_level old_level;
+
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
@@ -596,7 +608,18 @@ init_thread (struct thread *t, const char *name, int priority)
   t->wait_on_lock = NULL; // wait_on_lock: the lock this thread is waiting on (for nested donations)
   list_init (&t->donations); // donations: list of threads that have donated priority to this thread
   t->magic = THREAD_MAGIC;
+
+  old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
+  intr_set_level (old_level);
+
+#ifdef USERPROG
+  // init process-related informations.
+  t->pcb = NULL;
+  list_init(&t->child_list);
+  list_init(&t->file_descriptors);
+  t->executing_file = NULL;
+#endif
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
