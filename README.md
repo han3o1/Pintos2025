@@ -1,6 +1,14 @@
-# Pintos2025
-아자아자 화이팅❤️‍🩹
+# PintOS Project
 
-드디어 끝났당😄😄🎶🫠
+Team 16 : Jongwook Choi, Jaeheum Jeong
 
-😍😇🥹🤓😎🥸🥳🥳🥳
+## Project 1
+
+- Wait Queue
+- Basic Priority Scheduling
+
+## Project 2
+
+- User Program Exeuction
+- Process Management
+- System Calls

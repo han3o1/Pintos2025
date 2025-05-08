@@ -16,17 +16,9 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
-#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-#include "vm/frame.h"
-#include "vm/page.h"
 
-#ifndef VM
-// alternative of vm-related functions introduced in Project 3
-#define vm_frame_allocate(x, y) palloc_get_page(x)
-#define vm_frame_free(x) palloc_free_page(x)
-#endif
 
 #ifdef DEBUG
 #define _DEBUG_PRINTF(...) printf(__VA_ARGS__)
@@ -79,7 +71,6 @@ process_execute (const char *cmdline)
   // so we have to postpone afterward actions (such as putting 'pcb'
   // alongwith (determined) 'pid' into 'child_list'), using context switching.
   pcb->pid = PID_INITIALIZING;
-  pcb->parent_thread = thread_current();
 
   pcb->cmdline = cmdline_copy;
   pcb->waiting = false;
@@ -160,14 +151,6 @@ start_process (void *pcb_)
   }
   palloc_free_page (cmdline_tokens);
 
-  /* Set up CWD */
-  if (pcb->parent_thread != NULL && pcb->parent_thread->cwd != NULL) {
-    // child process inherits the CWD
-    t->cwd = dir_reopen(pcb->parent_thread->cwd);
-  }
-  else {
-    t->cwd = dir_open_root();
-  }
 
 finish_step:
 
@@ -277,20 +260,6 @@ process_exit (void)
     file_close(desc->file);
     palloc_free_page(desc); // see sys_open()
   }
-#ifdef VM
-  // mmap descriptors
-  struct list *mmlist = &cur->mmap_list;
-  while (!list_empty(mmlist)) {
-    struct list_elem *e = list_begin (mmlist);
-    struct mmap_desc *desc = list_entry(e, struct mmap_desc, elem);
-
-    // in sys_munmap(), the element is removed from the list
-    ASSERT( sys_munmap (desc->id) == true );
-  }
-#endif
-
-  /* Close CWD */
-  if(cur->cwd) dir_close (cur->cwd);
 
   // 2. clean up pcb object of all children processes
   struct list *child_list = &cur->child_list;
@@ -305,7 +274,6 @@ process_exit (void)
       // the child process becomes an orphan.
       // do not free pcb yet, postpone until the child terminates
       pcb->orphan = true;
-      pcb->parent_thread = NULL;
     }
   }
 
@@ -315,32 +283,15 @@ process_exit (void)
     file_close(cur->executing_file);
   }
 
-  /* Unblock the waiting parent process, if any, from wait().
-     now its resource (pcb on page, etc.) can be freed. */
-  /* IMPORTANT : The order of setting pcb->exited as true does matter.
-     To guarantee that the process and pcb is not used any more when freeing it
-     (i.e. in wait() procedure -- see near L250),
-     we have to run this assignment as late as possible
-     (just before a switch context might happen). */
-  cur->pcb->exited = true;
-  bool cur_orphan = cur->pcb->orphan;
+  // Unblock the waiting parent process, if any, from wait().
+  // now its resource (pcb on page, etc.) can be freed.
   sema_up (&cur->pcb->sema_wait);
 
-  // In this context, cur->pcb is supposed to be freed (so don't access it)
-  // Destroy the pcb object by itself, if it is orphan (which is stored before)
+  // Destroy the pcb object by itself, if it is orphan.
   // see (part 2) of above.
-  if (cur_orphan) {
+  if (cur->pcb->orphan == true) {
     palloc_free_page (& cur->pcb);
   }
-
-#ifdef VM
-  // Destroy the SUPT, its all SPTEs, all the frames, and swaps.
-  // Important: All the frames held by this thread should ALSO be freed
-  // (see the destructor of SPTE). Otherwise an access to frame with
-  // its owner thread had been died will result in fault.
-  vm_supt_destroy (cur->supt);
-  cur->supt = NULL;
-#endif
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -459,12 +410,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
-  /* Allocate and activate page directory, as well as SPTE. */
+  /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
-#ifdef VM
-  t->supt = vm_supt_create ();
-#endif
-
   if (t->pagedir == NULL)
     goto done;
   process_activate ();
@@ -649,25 +596,15 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-#ifdef VM
-      // Lazy load
-      struct thread *curr = thread_current ();
-      ASSERT (pagedir_get_page(curr->pagedir, upage) == NULL); // no virtual page yet?
-
-      if (! vm_supt_install_filesys(curr->supt, upage,
-            file, ofs, page_read_bytes, page_zero_bytes, writable) ) {
-        return false;
-      }
-#else
       /* Get a page of memory. */
-      uint8_t *kpage = vm_frame_allocate (PAL_USER, upage);
+      uint8_t *kpage = palloc_get_page (PAL_USER);
       if (kpage == NULL)
         return false;
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          vm_frame_free (kpage);
+          palloc_free_page (kpage);
           return false;
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -675,18 +612,14 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Add the page to the process's address space. */
       if (!install_page (upage, kpage, writable))
         {
-          vm_frame_free (kpage);
+          palloc_free_page (kpage);
           return false;
         }
-#endif
 
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
-#ifdef VM
-      ofs += PGSIZE;
-#endif
     }
   return true;
 }
@@ -746,15 +679,14 @@ setup_stack (void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  // upage address is the first segment of stack.
-  kpage = vm_frame_allocate (PAL_USER | PAL_ZERO, PHYS_BASE - PGSIZE);
+  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
         *esp = PHYS_BASE;
       else
-        vm_frame_free (kpage);
+        palloc_free_page (kpage);
     }
   return success;
 }
@@ -775,11 +707,6 @@ install_page (void *upage, void *kpage, bool writable)
 
   /* Verify that there's not already a page at that virtual
      address, then map our page there. */
-  bool success = (pagedir_get_page (t->pagedir, upage) == NULL);
-  success = success && pagedir_set_page (t->pagedir, upage, kpage, writable);
-#ifdef VM
-  success = success && vm_supt_install_frame (t->supt, upage, kpage);
-  if(success) vm_frame_unpin(kpage);
-#endif
-  return success;
+  return (pagedir_get_page (t->pagedir, upage) == NULL
+          && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
