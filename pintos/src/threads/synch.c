@@ -130,8 +130,8 @@ sema_up (struct semaphore *sema)
   sema->value++;
 
   /* priority scheduling - If not in interrupt context, yield the CPU if a higher-priority thread was unblocked. */
-  if (!intr_context ())
-    thread_yield ();
+  /* if (!intr_context ())
+    thread_yield (); */
 
   intr_set_level (old_level);
 }
@@ -292,9 +292,9 @@ lock_release (struct lock *lock)
   sema_up (&lock->semaphore);
 
   /* Yield only if scheduler is ready */
-  if (!thread_mlfqs && threading_started) {
+  /*if (!thread_mlfqs && threading_started) {
     thread_yield();
-  }
+  }*/
 }
 
 /* Returns true if the current thread holds LOCK, false

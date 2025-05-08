@@ -1,3 +1,4 @@
+#include "threads/thread.h"
 #include "userprog/process.h"
 #include <debug.h>
 #include <inttypes.h>
@@ -15,13 +16,11 @@
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
-#include "threads/thread.h"
 #include "threads/vaddr.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void argument_stack(char **argv, int argc, void **esp);
-
+static void argument_stack(const char *cmdline_tokens[], int cnt, void **esp);
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -29,7 +28,7 @@ static void argument_stack(char **argv, int argc, void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy, *file_name_copy;
+  char *fn_copy;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -39,23 +38,26 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  file_name_copy = palloc_get_page (0);
+  char *file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL)
   {
     palloc_free_page(fn_copy);
     return TID_ERROR;
   }
-  strlcpy (file_name_copy, file_name, PGSIZE);
+  strlcpy(file_name_copy, file_name, PGSIZE);
 
-  /* Parse the executable name only */
   char *save_ptr;
-  char *exec_name = strtok_r(file_name_copy, " ", &save_ptr);
+  char *exec_name = strtok_r(file_name_copy, " ", &save_ptr);  // 첫 번째 토큰 → 실행 파일 이름
 
-  /* Create a new thread to execute EXEC_NAME. */
-  tid = thread_create (exec_name, PRI_DEFAULT, start_process, fn_copy);
+  /* Create a new thread to execute FILE_NAME. */
+  tid = thread_create(exec_name, PRI_DEFAULT, start_process, fn_copy);
+  
+  /* Done with file_name_copy */
+  palloc_free_page(file_name_copy);
+
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
-  palloc_free_page (file_name_copy);
+    palloc_free_page (fn_copy);
+
   return tid;
 }
 
@@ -64,18 +66,18 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char *file_name = file_name_;
-  char *token, *save_ptr;
-  char *argv[64]; // 최대 64개의 인자 가정
+  const char *argv[50];
+  char *token;
+  char *save_ptr;
   int argc = 0;
-
+  char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
 
-  /* Tokenize file_name into argv[] */
-  for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
-       token = strtok_r(NULL, " ", &save_ptr))
-  {
+  char *prog_name = strtok_r(file_name, " ", &save_ptr);  // "args-single"
+  argv[argc++] = prog_name;
+  
+  while ((token = strtok_r(NULL, " ", &save_ptr)) != NULL) {
     argv[argc++] = token;
   }
 
@@ -87,15 +89,21 @@ start_process (void *file_name_)
 
   success = load (argv[0], &if_.eip, &if_.esp);
 
-  /* If load succeeded, set up argument stack. */
   if (success) {
-    argument_stack(argv, argc, &if_.esp);
-    //hex_dump((uintptr_t) if_.esp, if_.esp, (size_t)((uintptr_t)PHYS_BASE - (uintptr_t)if_.esp), true);
-    hex_dump(if_.esp, if_.esp, PHYS_BASE-if_.esp, true);
+    thread_current()->fd_table[1] = filesys_open("test.stdout");
+
+    void *user_esp = if_.esp;
+    argument_stack(argv, argc, &user_esp);
+    if_.esp = user_esp;
+    // hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
   }
+ 
+   // DEBUG
+  //hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
+
   if (!success) 
     thread_exit ();
 
@@ -121,6 +129,10 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  volatile int i;
+    for (i = 0; i < 100000000; i++)
+  {
+  }
   return -1;
 }
 
@@ -129,6 +141,15 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
+  /* Close all open files */
+  int i;
+  for (i = 0; i < FD_MAX; i++) {
+    if (cur->fd_table[i] != NULL) {
+      file_close(cur->fd_table[i]);
+      cur->fd_table[i] = NULL;
+    }
+  }
+
   uint32_t *pd;
 
   /* Destroy the current process's page directory and switch back
@@ -255,7 +276,12 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  char file_name_copy[NAME_MAX];
+  strlcpy(file_name_copy, file_name, NAME_MAX);
+  char *save_ptr;
+  char *exec_name = strtok_r(file_name_copy, " ", &save_ptr);
+  file = filesys_open(exec_name);
+
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -497,47 +523,91 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
+/*
 static void
-argument_stack(char **argv, int argc, void **esp)
-{
-  char *arg_addr[64]; // 각 인자의 주소 저장용
+argument_stack(char **argv, int argc, void **esp) {
+  uint32_t argv_addr[argc];
   int i;
 
-  // 인자를 역순으로 스택에 push (문자열 복사)
+  // (1) Push arguments strings
   for (i = argc - 1; i >= 0; i--) {
-    size_t len = strlen(argv[i]) + 1;
-    *esp -= len;
-    memcpy(*esp, argv[i], len);
-    arg_addr[i] = *esp;
+      size_t len = strlen(argv[i]) + 1;
+      *esp -= len;
+      memcpy(*esp, argv[i], len);
+      argv_addr[i] = (uint32_t)(*esp);
   }
 
-  // Word align: 4의 배수로 정렬
-  uintptr_t esp_align = (uintptr_t)(*esp) % 4;
-  if (esp_align) {
-    *esp -= esp_align;
-    memset(*esp, 0, esp_align);
+  // (2) Word-align
+  while ((uint32_t)(*esp) % 4 != 0) {
+      *esp -= 1;
+      *(uint8_t *)(*esp) = 0;
   }
 
-  // NULL sentinel
+  // (3) NULL sentinel
   *esp -= sizeof(char *);
-  *(char **)(*esp) = NULL;
+  *(uint32_t *)(*esp) = 0;
 
-  // argv[i] 주소를 정순으로 push
-  for (i = 0; i < argc; i++) {
+  // (4) Push argv addresses
+  for (i = argc - 1; i >= 0; i--) {
     *esp -= sizeof(char *);
-    *(char **)(*esp) = arg_addr[i];
+    *(uint32_t *)(*esp) = argv_addr[i];
   }
 
-  // argv 주소 저장
-  char **argv_addr = (char **)*esp;
+  // (5) Push argv (argv[0] address)
+  uint32_t argv_ptr = (uint32_t)(*esp);
   *esp -= sizeof(char **);
-  *(char ***)(*esp) = argv_addr;
+  *(uint32_t *)(*esp) = argv_ptr;
 
-  // argc push
+  // (6) Push argc
   *esp -= sizeof(int);
-  *(int *)(*esp) = argc;
+  *(uint32_t *)(*esp) = argc;
 
-  // fake return address
+  // (7) Push fake return address
   *esp -= sizeof(void *);
-  *(void **)(*esp) = NULL;
+  *(uint32_t *)(*esp) = 0;
+}*/
+
+/*
+ * Push arguments into the stack region of user program
+ * (specified by esp), according to the calling convention.
+ */
+static void
+argument_stack (const char* cmdline_tokens[], int argc, void **esp)
+{
+  ASSERT(argc >= 0);
+
+  int i, len = 0;
+  void* argv_addr[argc];
+  for (i = 0; i < argc; i++) {
+    len = strlen(cmdline_tokens[i]) + 1;
+    *esp -= len;
+    memcpy(*esp, cmdline_tokens[i], len);
+    argv_addr[i] = *esp;
+  }
+
+  // word align
+  *esp = (void*)((unsigned int)(*esp) & 0xfffffffc);
+
+  // last null
+  *esp -= 4;
+  *((uint32_t*) *esp) = 0;
+
+  // setting **esp with argvs
+  for (i = argc - 1; i >= 0; i--) {
+    *esp -= 4;
+    *((void**) *esp) = argv_addr[i];
+  }
+
+  // setting **argv (addr of stack, esp)
+  *esp -= 4;
+  *((void**) *esp) = (*esp + 4);
+
+  // setting argc
+  *esp -= 4;
+  *((int*) *esp) = argc;
+
+  // setting ret addr
+  *esp -= 4;
+  *((int*) *esp) = 0;
+
 }
