@@ -6,11 +6,13 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/pagedir.h"
 
 static void syscall_handler (struct intr_frame *);
 
 static int32_t get_user (const uint8_t *uaddr);
-static int memread_user (void *src, void *des, size_t bytes);
+//static int memread_user (void *src, void *des, size_t bytes);
+bool is_valid_ptr(const void *usr_ptr);
 
 typedef uint32_t pid_t;
 
@@ -37,11 +39,12 @@ syscall_handler (struct intr_frame *f)
 {
   int syscall_number;
 
-  ASSERT( sizeof(syscall_number) == 4 ); // assuming x86
+  ASSERT(sizeof(syscall_number) == 4 ); // assuming x86
 
   // The system call number is in the 32-bit word at the caller's stack pointer.
-  if (memread_user(f->esp, &syscall_number, sizeof(syscall_number)) == -1)
+  if (!is_valid_ptr(f->esp))
     fail_invalid_access();
+  syscall_number = *(int *)(f->esp);
 
   // Dispatch w.r.t system call number
   // SYS_*** constants are defined in syscall-nr.h
@@ -56,9 +59,10 @@ syscall_handler (struct intr_frame *f)
   case SYS_EXIT:
     {
       int exitcode;
-      if (memread_user(f->esp + 4, &exitcode, sizeof(exitcode)) == -1)
+      if (!is_valid_ptr(f->esp + 4))
         fail_invalid_access();
 
+      exitcode = *(int *)(f->esp + 4);
       sys_exit(exitcode);
       NOT_REACHED();
       break;
@@ -67,15 +71,27 @@ syscall_handler (struct intr_frame *f)
   case SYS_EXEC:
     {
       void* cmdline;
-      if (memread_user(f->esp + 4, &cmdline, sizeof(cmdline)) == -1)
+      if (!is_valid_ptr(f->esp + 4))
         fail_invalid_access();
 
+      cmdline = *(void **)(f->esp + 4);
       int return_code = sys_exec((const char*) cmdline);
       f->eax = (uint32_t) return_code;
       break;
     }
 
   case SYS_WAIT:
+    {
+      pid_t pid;
+      if (!is_valid_ptr(f->esp + 4))
+        fail_invalid_access();
+
+      pid = *(pid_t *)(f->esp + 4);
+      int ret = sys_wait(pid);
+      f->eax = (uint32_t) ret;
+      break;
+    }
+  
   case SYS_CREATE:
   case SYS_REMOVE:
   case SYS_OPEN:
@@ -89,12 +105,16 @@ syscall_handler (struct intr_frame *f)
       const void *buffer;
       unsigned size;
 
-      if(-1 == memread_user(f->esp + 4, &fd, 4)) fail_invalid_access();
-      if(-1 == memread_user(f->esp + 8, &buffer, 4)) fail_invalid_access();
-      if(-1 == memread_user(f->esp + 12, &size, 4)) fail_invalid_access();
+      if (!is_valid_ptr(f->esp + 4)) fail_invalid_access();
+      if (!is_valid_ptr(f->esp + 8)) fail_invalid_access();
+      if (!is_valid_ptr(f->esp + 12)) fail_invalid_access();
+
+      fd = *(int *)(f->esp + 4);
+      buffer = *(void **)(f->esp + 8);
+      size = *(unsigned *)(f->esp + 12);
 
       if(!sys_write(fd, buffer, size, &return_code))
-        thread_exit(); // TODO
+        thread_exit();
       f->eax = (uint32_t) return_code;
       break;
     }
@@ -119,9 +139,6 @@ void sys_halt(void) {
 
 void sys_exit(int status) {
   printf("%s: exit(%d)\n", thread_current()->name, status);
-
-  // set return code : status
-  // TODO pass status into the kernel
   thread_exit();
 }
 
@@ -136,6 +153,10 @@ pid_t sys_exec(const char *cmdline) {
 
   tid_t child_tid = process_execute(cmdline);
   return child_tid;
+}
+
+int sys_wait(pid_t pid) {
+  return process_wait(pid);
 }
 
 bool sys_write(int fd, const void *buffer, unsigned size, int* ret) {
@@ -181,6 +202,7 @@ get_user (const uint8_t *uaddr) {
  * starting address `src` (uaddr), and writes to dst.
  * Returns the number of bytes read, or -1 on page fault (invalid memory access)
  */
+/*
 static int
 memread_user (void *src, void *dst, size_t bytes)
 {
@@ -193,3 +215,25 @@ memread_user (void *src, void *dst, size_t bytes)
   }
   return (int)bytes;
 }
+  */
+  
+bool
+is_valid_ptr(const void *usr_ptr)
+{
+  struct thread *cur = thread_current();
+
+  // 1. NULL 포인터 검사
+  if (usr_ptr == NULL)
+    return false;
+
+  // 2. 사용자 공간에 속한 주소인지 검사
+  if (!is_user_vaddr(usr_ptr))
+    return false;
+
+  // 3. 해당 주소가 실제로 매핑된 유효한 페이지인지 확인
+  if (pagedir_get_page(cur->pagedir, usr_ptr) == NULL)
+    return false;
+
+  return true;
+}
+  
