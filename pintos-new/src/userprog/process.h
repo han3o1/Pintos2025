@@ -11,11 +11,11 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
 
-/* File descriptor */
-struct file_desc {
-  int id;
-  struct list_elem elem;
-  struct file* file;
-};
+struct file_descriptor {
+  int fd_num;                 // File descriptor number
+  tid_t owner;                // 소유자
+  struct file *file_struct;   // 실제 파일 객체 포인터
+  struct list_elem elem;      // 리스트 연결용 엘리먼트
+};  
 
 #endif /* userprog/process.h */
