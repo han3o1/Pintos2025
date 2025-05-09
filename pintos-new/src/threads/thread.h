@@ -104,6 +104,7 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
     struct list file_descriptors;       /* List of file_descriptors the thread contains */
+    struct file *executing_file;        /* The executable file of associated process. */
     int next_fd;
 #endif
 

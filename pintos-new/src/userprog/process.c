@@ -121,7 +121,7 @@ process_wait (tid_t child_tid)
   volatile int i;
   for (i = 0; i < 1000000000; i++)
   {
-    
+
   }
 
   return -1;
@@ -133,6 +133,12 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* Release file for the executable */
+  if (cur->executing_file) {
+    file_allow_write(cur->executing_file);
+    file_close(cur->executing_file);
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -344,11 +350,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
+  /* Deny writes to executables. */
+  file_deny_write(file);
+  thread_current()->executing_file = file;
+
   success = true;
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 

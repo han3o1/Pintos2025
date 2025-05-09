@@ -17,6 +17,16 @@ static void syscall_handler (struct intr_frame *);
 
 static int32_t get_user (const uint8_t *uaddr);
 bool is_valid_ptr(const void *usr_ptr);
+
+struct
+file_descriptor 
+{
+  int fd_num;                 // File descriptor number
+  tid_t owner;                // 소유자
+  struct file *file_struct;   // 실제 파일 객체 포인터
+  struct list_elem elem;      // 리스트 연결용 엘리먼트
+};
+
 static struct file_descriptor* get_open_file(int fd_num);
 int allocate_fd(void);
 void close_open_file(int fd_num);
@@ -281,11 +291,8 @@ bool create(const char* file_name, unsigned size) {
     fail_invalid_access();
 
   lock_acquire(&filesys_lock);
-
   bool return_code = filesys_create(file_name, size);
-
   lock_release(&filesys_lock);
-
   return return_code;
 }
 
@@ -294,11 +301,8 @@ bool remove(const char* file_name) {
     fail_invalid_access();
 
   lock_acquire(&filesys_lock);
-
   bool return_code = filesys_remove(file_name);
-
   lock_release(&filesys_lock);
-
   return return_code;
 }
 
@@ -307,7 +311,6 @@ int open(const char* file_name) {
     fail_invalid_access();
 
   lock_acquire(&filesys_lock);
-
   struct file* file_opened = filesys_open(file_name);
   if (!file_opened) {
     lock_release(&filesys_lock);
@@ -326,9 +329,7 @@ int open(const char* file_name) {
   fd->owner = thread_current()->tid;
 
   list_push_back(&thread_current()->file_descriptors, &fd->elem);
-
   lock_release(&filesys_lock);
-
   return fd->fd_num;
 }
 
@@ -342,9 +343,7 @@ int filesize(int fd) {
   }
 
   int length = file_length(file_d->file_struct);
-
   lock_release(&filesys_lock);
-
   return length;
 }
 
@@ -376,9 +375,8 @@ int read(int fd, void *buffer, unsigned size) {
     lock_release(&filesys_lock);
     return bytes_read;
   }
-  
-  lock_release(&filesys_lock);
 
+  lock_release(&filesys_lock);
   return -1;
 }
 
@@ -404,12 +402,10 @@ int write(int fd, const void *buffer, unsigned size) {
   
   struct file_descriptor* file_d = get_open_file(fd);
   int result = -1;
-  if(file_d && file_d->file_struct) {
+  if (file_d && file_d->file_struct)
     result = file_write(file_d->file_struct, buffer, size);
-  }
     
   lock_release(&filesys_lock);
-
   return result;
 }
 
@@ -438,9 +434,7 @@ unsigned tell(int fd) {
 
 void close(int fd) {
   lock_acquire(&filesys_lock);
-  
   close_open_file(fd);
-
   lock_release(&filesys_lock);
 }
 
@@ -451,7 +445,6 @@ static int32_t
 get_user (const uint8_t *uaddr) {
   // check that a user pointer `uaddr` points below PHYS_BASE
   if (! ((void*)uaddr < PHYS_BASE)) {
-    // TODO distinguish with result -1 (convert into another handler)
     return -1; // invalid memory access
   }
 
