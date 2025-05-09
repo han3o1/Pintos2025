@@ -35,7 +35,7 @@ process_execute (const char *file_name)
 
   /* Make a copy of CMD_LINE.
      Otherwise there's a race between the caller and load(). */
-     file_name_copy = palloc_get_page (0);
+  file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL) return TID_ERROR;
   strlcpy (file_name_copy, file_name, PGSIZE);
 
@@ -57,6 +57,25 @@ process_execute (const char *file_name)
     palloc_free_page (file_name_copy);
     return TID_ERROR;
   }
+
+  #ifdef USERPROG
+  // 자식 관리 구조체 생성 및 초기화
+  struct child_status *child = calloc(1, sizeof(struct child_status));
+  if (child == NULL)
+    return TID_ERROR;
+
+  child->tid = tid;
+  child->exit_status = -1;
+  child->exited = false;
+  child->has_been_waited = false;
+
+  // 부모의 자식 리스트에 등록
+  struct thread *cur = thread_current();
+  list_push_back(&cur->children, &child->elem);
+#endif
+
+  palloc_free_page(exec_name); // exec_name은 더 이상 필요 없으므로 해제
+
   return tid;
 }
 
@@ -88,6 +107,17 @@ start_process (void *file_name_)
   struct thread *t = thread_current();
   t->next_fd = 3;
 
+  #ifdef USERPROG
+  // 부모에게 로딩 상태 전달
+  struct thread *parent = get_thread_by_id(t->parent_id);
+  if (parent != NULL) {
+    lock_acquire(&parent->lock_child);
+    parent->child_load_status = success ? 1 : -1;
+    cond_signal(&parent->cond_child, &parent->lock_child);
+    lock_release(&parent->lock_child);
+  }
+#endif
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success)
@@ -115,16 +145,45 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid)
 {
-  // TODO : this is unimplemented version yet,
-  // but process_wait should block the process for a while
-  // to prevent the pintos kernel from shutting down.
-  volatile int i;
-  for (i = 0; i < 1000000000; i++)
-  {
-    
+  struct thread *cur = thread_current();
+  struct list_elem *e;
+  struct child_status *cs = NULL;
+  int exit_status = -1;
+
+  // 1. 자식 리스트에서 child_tid에 해당하는 자식 찾기
+  for (e = list_begin(&cur->children); e != list_end(&cur->children); e = list_next(e)) {
+    struct child_status *entry = list_entry(e, struct child_status, elem);
+    if (entry->tid == child_tid) {
+      cs = entry;
+      break;
+    }
   }
 
-  return -1;
+  // 2. 자식이 없다면 실패
+  if (cs == NULL)
+    return -1;
+
+  // 3. 이미 기다렸던 자식이면 실패
+  if (cs->has_been_waited)
+    return -1;
+
+  cs->has_been_waited = true;
+
+  // 4. 자식이 아직 종료되지 않았다면 기다림
+  lock_acquire(&cur->lock_child);
+  while (!cs->exited) {
+    cond_wait(&cur->cond_child, &cur->lock_child);
+  }
+
+  // 5. 자식의 종료 상태를 받아옴
+  exit_status = cs->exit_status;
+  lock_release(&cur->lock_child);
+
+  // 6. 자식 정보 리스트에서 제거하고 메모리 해제
+  list_remove(&cs->elem);
+  free(cs);
+
+  return exit_status;
 }
 
 /* Free the current process's resources. */
@@ -133,6 +192,41 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* 1. 자식 리스트 정리 */
+  struct list_elem *e, *next;
+  for (e = list_begin(&cur->children); e != list_end(&cur->children); e = next) {
+    next = list_next(e);
+    struct child_status *child = list_entry(e, struct child_status, elem);
+    list_remove(e);
+    free(child); // 자식 상태 메모리 해제
+  }
+
+  /* 2. 실행 중인 파일 쓰기 허용 및 닫기 */
+  if (cur->exec_file != NULL) {
+    file_allow_write(cur->exec_file);
+    file_close(cur->exec_file);
+    cur->exec_file = NULL;
+  }
+
+  /* 3. 부모에게 종료 상태 통보 */
+  if (cur->parent_id != TID_ERROR) {
+    struct thread *parent = get_thread_by_id(cur->parent_id);
+    if (parent != NULL) {
+      lock_acquire(&parent->lock_child);
+      struct list_elem *e;
+      for (e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
+        struct child_status *child = list_entry(e, struct child_status, elem);
+        if (child->tid == cur->tid) {
+          child->exit_status = cur->exit_status;  // exit()에서 설정되었을 것
+          child->exited = true;
+          cond_signal(&parent->cond_child, &parent->lock_child);
+          break;
+        }
+      }
+      lock_release(&parent->lock_child);
+    }
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -344,11 +438,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
+  /* Deny writes to executables. */
+  file_deny_write(file);
+  thread_current()->executing_file = file;
+
   success = true;
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 

@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -104,12 +105,43 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
     struct list file_descriptors;       /* List of file_descriptors the thread contains */
+    struct file *executing_file;        /* The executable file of associated process. */
     int next_fd;
+
+    /* Process hierarchy support */
+    tid_t parent_id;                   /* Parent thread id */
+    int child_load_status;             /* -1: load failed, 0: not yet loaded, 1: load success */
+    
+    struct lock lock_child;            /* Lock for child-related sync */
+    struct condition cond_child;       /* Condition variable for child loading and waiting */
+    
+    struct list children;              /* List of child processes (struct child_status) */
+    
+    struct file *exec_file;            /* The executable file (can be same as executing_file or used differently) */
+
+    int exit_status;  // Used to store process's exit status for process_exit
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+#ifdef USERPROG
+/* Child status structure for process_wait/exit. */
+struct child_status
+{
+  tid_t tid;                       /* Child TID */
+  int exit_status;                 /* Exit status of the child */
+  bool exited;                     /* Whether the child has exited */
+  bool has_been_waited;           /* Whether parent has already waited */
+  struct list_elem elem;          /* Element for parent's children list */
+};
+
+/* Optional helper function to find thread by tid. */
+struct thread *get_thread_by_id(tid_t tid);
+
+void thread_yield_on_return(void);
+#endif
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
