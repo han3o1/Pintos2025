@@ -16,10 +16,10 @@ bool is_valid_ptr(const void *usr_ptr);
 
 typedef uint32_t pid_t;
 
-void sys_halt (void);
-void sys_exit (int);
-pid_t sys_exec (const char *cmdline);
-bool sys_write(int fd, const void *buffer, unsigned size, int* ret);
+void halt (void);
+void exit (int);
+pid_t exec (const char *cmdline);
+bool write(int fd, const void *buffer, unsigned size, int* ret);
 
 
 void
@@ -30,7 +30,7 @@ syscall_init (void)
 
 // in case of invalid memory access, fail and exit.
 static int fail_invalid_access(void) {
-  sys_exit (-1);
+  exit (-1);
   NOT_REACHED();
 }
 
@@ -51,7 +51,7 @@ syscall_handler (struct intr_frame *f)
   switch (syscall_number) {
   case SYS_HALT:
     {
-      sys_halt();
+      halt();
       NOT_REACHED();
       break;
     }
@@ -63,7 +63,7 @@ syscall_handler (struct intr_frame *f)
         fail_invalid_access();
 
       exitcode = *(int *)(f->esp + 4);
-      sys_exit(exitcode);
+      exit(exitcode);
       NOT_REACHED();
       break;
     }
@@ -75,7 +75,7 @@ syscall_handler (struct intr_frame *f)
         fail_invalid_access();
 
       cmdline = *(void **)(f->esp + 4);
-      int return_code = sys_exec((const char*) cmdline);
+      int return_code = exec((const char*) cmdline);
       f->eax = (uint32_t) return_code;
       break;
     }
@@ -87,7 +87,7 @@ syscall_handler (struct intr_frame *f)
         fail_invalid_access();
 
       pid = *(pid_t *)(f->esp + 4);
-      int ret = sys_wait(pid);
+      int ret = wait(pid);
       f->eax = (uint32_t) ret;
       break;
     }
@@ -113,7 +113,7 @@ syscall_handler (struct intr_frame *f)
       buffer = *(void **)(f->esp + 8);
       size = *(unsigned *)(f->esp + 12);
 
-      if(!sys_write(fd, buffer, size, &return_code))
+      if(!write(fd, buffer, size, &return_code))
         thread_exit();
       f->eax = (uint32_t) return_code;
       break;
@@ -133,16 +133,16 @@ unhandled:
 
 }
 
-void sys_halt(void) {
+void halt(void) {
   shutdown_power_off();
 }
 
-void sys_exit(int status) {
+void exit(int status) {
   printf("%s: exit(%d)\n", thread_current()->name, status);
   thread_exit();
 }
 
-pid_t sys_exec(const char *cmdline) {
+pid_t exec(const char *cmdline) {
   // cmdline is an address to the character buffer, on user memory
   // so a validation check is required
   if (get_user((const uint8_t*) cmdline) == -1) {
@@ -155,11 +155,11 @@ pid_t sys_exec(const char *cmdline) {
   return child_tid;
 }
 
-int sys_wait(pid_t pid) {
+int wait(pid_t pid) {
   return process_wait(pid);
 }
 
-bool sys_write(int fd, const void *buffer, unsigned size, int* ret) {
+bool write(int fd, const void *buffer, unsigned size, int* ret) {
   // memory validation
   if (get_user((const uint8_t*) buffer) == -1) {
     // invalid
@@ -175,7 +175,7 @@ bool sys_write(int fd, const void *buffer, unsigned size, int* ret) {
     return true;
   }
   else {
-    printf("[ERROR] sys_write unimplemented\n");
+    printf("[ERROR] write unimplemented\n");
   }
   return false;
 }
