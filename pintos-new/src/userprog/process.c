@@ -58,7 +58,7 @@ process_execute (const char *file_name)
     return TID_ERROR;
   }
 
-  #ifdef USERPROG
+#ifdef USERPROG
   // 자식 관리 구조체 생성 및 초기화
   struct child_status *child = calloc(1, sizeof(struct child_status));
   if (child == NULL)
@@ -75,7 +75,6 @@ process_execute (const char *file_name)
 #endif
 
   palloc_free_page(exec_name); // exec_name은 더 이상 필요 없으므로 해제
-
   return tid;
 }
 
@@ -91,23 +90,26 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+
   for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
       token = strtok_r(NULL, " ", &save_ptr))
   {
     tmp[cnt++] = token;
   }
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
   success = load (file_name, &if_.eip, &if_.esp);
   argument_stack((const char **)tmp, cnt, &if_.esp); // pushing arguments into stack
 
   struct thread *t = thread_current();
   t->next_fd = 3;
 
-  #ifdef USERPROG
+#ifdef USERPROG
   // 부모에게 로딩 상태 전달
   struct thread *parent = get_thread_by_id(t->parent_id);
   if (parent != NULL) {
@@ -230,6 +232,7 @@ process_exit (void)
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
+  /* 2. 현재 프로세스의 페이지 디렉토리 삭제 및 커널 디렉토리로 복귀 */   
   pd = cur->pagedir;
   if (pd != NULL)
     {
@@ -244,6 +247,43 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  /* 3. 자식 프로세스 관련 처리 */
+  struct list_elem *e;
+  for (e = list_begin (&cur->children); e != list_end (&cur->children); e = list_next (e))
+  {
+    struct child_status *child = list_entry (e, struct child_status, elem);
+    
+    /* 2.1. 자식 프로세스 정리 */
+    list_remove(e);
+    palloc_free_page(child); // 자식 프로세스 정보 메모리 해제
+  }
+
+  /* 3. 파일 수정 허용 (파일을 쓸 수 있게) */
+  file_allow_write(cur->exec_file);
+
+  /* 4. 부모 프로세스와 동기화 */
+  if (cur->parent_id != TID_ERROR)
+  {
+    struct thread *parent = get_thread_by_id(cur->parent_id);  // 부모 스레드 가져오기
+      
+    if (parent != NULL) {
+      // 부모의 락을 획득하여 자식 프로세스 종료 상태를 전달
+      lock_acquire(&parent->lock_child);
+  
+      // 자식의 종료 상태를 전달
+      if (cur->child_load_status == -1) {
+        cur->child_load_status = -1;  // 로드 실패 처리
+      } else {
+        cur->child_load_status = 1;   // 로드 성공 처리
+      }
+  
+      cond_signal(&parent->cond_child, &parent->lock_child);  // 부모에게 신호 보내기
+      lock_release(&parent->lock_child);  // 부모 락 해제
+    }
+  }
+  /* 5. 프로세스 종료 */
+  thread_exit ();  // 현재 스레드 종료
 }
 
 /* Sets up the CPU for running user code in the current

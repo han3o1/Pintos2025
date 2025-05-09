@@ -128,6 +128,11 @@ sema_up (struct semaphore *sema)
     // the thread of highest priority (in sema waiters) should wake up
     target = list_entry (list_pop_front (&sema->waiters), struct thread, elem);
     thread_unblock (target);
+
+    // 우선순위가 높은 스레드가 있으면 현재 스레드가 양보한다
+    if (target->priority > thread_current()->priority) {
+      thread_yield();
+    }
   }
 
   intr_set_level (old_level);

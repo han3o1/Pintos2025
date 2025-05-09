@@ -33,7 +33,9 @@ void close_open_file(int fd_num);
 
 void halt (void);
 void exit (int);
+
 pid_t exec (const char *cmd_line);
+
 int wait (pid_t pid);
 
 bool create(const char* file_name, unsigned size);
@@ -100,6 +102,7 @@ syscall_handler (struct intr_frame *f)
   case SYS_EXEC: // 2
     {
       void* cmd_line;
+
       if (!is_valid_ptr(f->esp + 4))
         fail_invalid_access();
 

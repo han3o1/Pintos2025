@@ -230,6 +230,7 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+
 #ifdef USERPROG
   /* 현재 스레드를 부모로 설정 */
   t->parent_id = thread_current()->tid;
@@ -601,6 +602,7 @@ init_thread (struct thread *t, const char *name, int priority)
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+
 
 #ifdef USERPROG
   list_init(&t->file_descriptors);
