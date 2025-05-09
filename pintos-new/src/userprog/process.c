@@ -86,6 +86,7 @@ start_process (void *file_name_)
   argument_stack((const char **)tmp, cnt, &if_.esp); // pushing arguments into stack
 
   struct thread *t = thread_current();
+  t->next_fd = 3;
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
