@@ -34,7 +34,7 @@ process_execute (const char *file_name)
   tid_t tid;
 
   /* Make a copy of CMD_LINE.
-  Otherwise there's a race between the caller and load(). */
+     Otherwise there's a race between the caller and load(). */
   file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL) return TID_ERROR;
   strlcpy (file_name_copy, file_name, PGSIZE);
@@ -58,25 +58,23 @@ process_execute (const char *file_name)
     return TID_ERROR;
   }
 
-  /* 1. Initialize the child process status structure */
-  struct thread *cur = thread_current();  // Get the current thread (parent thread)
-
-  struct child_status *child = calloc(1, sizeof *child);  // Allocate memory for the child status structure
-  if (child == NULL) {
-    palloc_free_page(exec_name);
-    palloc_free_page(file_name_copy);
+#ifdef USERPROG
+  // 자식 관리 구조체 생성 및 초기화
+  struct child_status *child = calloc(1, sizeof(struct child_status));
+  if (child == NULL)
     return TID_ERROR;
-  }
 
-  child->child_id = tid;  // Set child_id to the ID of the newly created thread
-  child->is_exit_called = false;  // Set is_exit_called to false
-  child->has_been_waited = false;  // Set has_been_waited to false
+  child->tid = tid;
+  child->exit_status = -1;
+  child->exited = false;
+  child->has_been_waited = false;
 
-  /* 2. Add the new child to the list of children */
-  list_push_back(&cur->children, &child->elem);  // Add the child's status to the parent's children list
+  // 부모의 자식 리스트에 등록
+  struct thread *cur = thread_current();
+  list_push_back(&cur->children, &child->elem);
+#endif
 
-  /* 3. Cleanup and return */
-  palloc_free_page(exec_name);  // Release memory pages for exec_name
+  palloc_free_page(exec_name); // exec_name은 더 이상 필요 없으므로 해제
   return tid;
 }
 
@@ -111,30 +109,16 @@ start_process (void *file_name_)
   struct thread *t = thread_current();
   t->next_fd = 3;
 
-  // 부모 프로세스와 상호작용
-  if (t->parent_id != TID_ERROR) {
-    struct thread *parent = get_thread_by_id(t->parent_id);  // 부모 스레드 가져오기
-
-    if (parent != NULL) {  // 부모 스레드가 존재하면 진행
-      // 74-2. 부모와 동기화
-      lock_acquire(&parent->lock_child);
-
-      // 74-1. 자식 프로세스의 로드 상태 설정
-      if (success) {
-        t->child_load_status = 1;  // 로드 성공
-      } else {
-        t->child_load_status = -1; // 로드 실패
-      }
-
-      // 74-3. 부모에게 로드 상태를 알림
-      cond_signal(&parent->cond_child, &parent->lock_child);  // 부모에게 신호 보내기 
-
-      lock_release(&parent->lock_child);
-    } else {
-      // 부모가 없으면 오류 처리 또는 종료 처리
-      t->child_load_status = -1;  // 부모가 없으면 실패 처리
-    }
+#ifdef USERPROG
+  // 부모에게 로딩 상태 전달
+  struct thread *parent = get_thread_by_id(t->parent_id);
+  if (parent != NULL) {
+    lock_acquire(&parent->lock_child);
+    parent->child_load_status = success ? 1 : -1;
+    cond_signal(&parent->cond_child, &parent->lock_child);
+    lock_release(&parent->lock_child);
   }
+#endif
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -163,46 +147,44 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid)
 {
-  struct thread *t = thread_current ();
-  struct list *child_list = &(t->children);
-  struct list_elem *it = NULL;
-  struct thread *child_thread = NULL;
+  struct thread *cur = thread_current();
+  struct list_elem *e;
+  struct child_status *cs = NULL;
+  int exit_status = -1;
 
-  if (!list_empty(child_list)) {
-    for (it = list_front(child_list); it != list_end(child_list); it = list_next(it)) {
-      child_thread = list_entry(it, struct thread, allelem);  // child_thread는 리스트에서 해당 항목에 대한 스레드 정보
-
-      // child_tid를 사용하여 자식 스레드를 찾음
-      if(child_thread->tid == child_tid) { // OK, the direct child found
-        break;
-      }
+  // 1. 자식 리스트에서 child_tid에 해당하는 자식 찾기
+  for (e = list_begin(&cur->children); e != list_end(&cur->children); e = list_next(e)) {
+    struct child_status *entry = list_entry(e, struct child_status, elem);
+    if (entry->tid == child_tid) {
+      cs = entry;
+      break;
     }
   }
 
-  // if child process is not found, return -1 immediately
-  if (child_thread == NULL) {
-    _DEBUG_PRINTF("[DEBUG] wait(): child not found, pid = %d\n", child_tid);
+  // 2. 자식이 없다면 실패
+  if (cs == NULL)
     return -1;
+
+  // 3. 이미 기다렸던 자식이면 실패
+  if (cs->has_been_waited)
+    return -1;
+
+  cs->has_been_waited = true;
+
+  // 4. 자식이 아직 종료되지 않았다면 기다림
+  lock_acquire(&cur->lock_child);
+  while (!cs->exited) {
+    cond_wait(&cur->cond_child, &cur->lock_child);
   }
 
-  if (child_thread->child_load_status == -1) {
-    // already waiting (the parent already called wait on child's pid)
-    _DEBUG_PRINTF("[DEBUG] wait(): child found, pid = %d, but it is already waiting\n", child_tid);
-    return -1; // a process may wait for any fixed child at most once
-  }
+  // 5. 자식의 종료 상태를 받아옴
+  exit_status = cs->exit_status;
+  lock_release(&cur->lock_child);
 
-  // 자식 스레드가 종료될 때까지 대기
-  while (child_thread->child_load_status != 1) {
-    sema_down(&child_thread->lock_child);  // 자식 스레드가 종료될 때까지 대기
-  }
+  // 6. 자식 정보 리스트에서 제거하고 메모리 해제
+  list_remove(&cs->elem);
+  free(cs);
 
-  // 자식 스레드 종료 상태를 반환
-  int exit_status = child_thread->child_exit_status;
-
-  // 자식 스레드를 자식 리스트에서 제거
-  list_remove(it);
-
-  // 대기 후 종료 상태 반환
   return exit_status;
 }
 
@@ -212,6 +194,41 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* 1. 자식 리스트 정리 */
+  struct list_elem *e, *next;
+  for (e = list_begin(&cur->children); e != list_end(&cur->children); e = next) {
+    next = list_next(e);
+    struct child_status *child = list_entry(e, struct child_status, elem);
+    list_remove(e);
+    free(child); // 자식 상태 메모리 해제
+  }
+
+  /* 2. 실행 중인 파일 쓰기 허용 및 닫기 */
+  if (cur->exec_file != NULL) {
+    file_allow_write(cur->exec_file);
+    file_close(cur->exec_file);
+    cur->exec_file = NULL;
+  }
+
+  /* 3. 부모에게 종료 상태 통보 */
+  if (cur->parent_id != TID_ERROR) {
+    struct thread *parent = get_thread_by_id(cur->parent_id);
+    if (parent != NULL) {
+      lock_acquire(&parent->lock_child);
+      struct list_elem *e;
+      for (e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
+        struct child_status *child = list_entry(e, struct child_status, elem);
+        if (child->tid == cur->tid) {
+          child->exit_status = cur->exit_status;  // exit()에서 설정되었을 것
+          child->exited = true;
+          cond_signal(&parent->cond_child, &parent->lock_child);
+          break;
+        }
+      }
+      lock_release(&parent->lock_child);
+    }
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -461,11 +478,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
+  /* Deny writes to executables. */
+  file_deny_write(file);
+  thread_current()->executing_file = file;
+
   success = true;
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 

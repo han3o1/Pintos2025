@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -113,34 +114,43 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
     struct list file_descriptors;       /* List of file_descriptors the thread contains */
+    struct file *executing_file;        /* The executable file of associated process. */
     int next_fd;
 
-    /* 부모 스레드의 ID */
-    tid_t parent_id; 
+    /* Process hierarchy support */
+    tid_t parent_id;                   /* Parent thread id */
+    int child_load_status;             /* -1: load failed, 0: not yet loaded, 1: load success */
     
-    /* 자식 프로세스의 로딩 상태
-     * 0: 로딩되지 않음
-     * -1: 로딩 실패
-     * 1: 로딩 성공
-     */
-    int child_load_status;  
+    struct lock lock_child;            /* Lock for child-related sync */
+    struct condition cond_child;       /* Condition variable for child loading and waiting */
     
-    /* 자식 프로세스를 기다리기 위한 락 */
-    struct lock lock_child;  
+    struct list children;              /* List of child processes (struct child_status) */
     
-    /* 자식 프로세스를 위한 조건 변수 */
-    struct condition cond_child;  
-    
-    /* 자식 프로세스를 관리할 리스트 */
-    struct list children;   
-    
-    /* 현재 스레드의 실행 파일을 나타내는 파일 포인터 */
-    struct file *exec_file;  
+    struct file *exec_file;            /* The executable file (can be same as executing_file or used differently) */
+
+    int exit_status;  // Used to store process's exit status for process_exit
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+#ifdef USERPROG
+/* Child status structure for process_wait/exit. */
+struct child_status
+{
+  tid_t tid;                       /* Child TID */
+  int exit_status;                 /* Exit status of the child */
+  bool exited;                     /* Whether the child has exited */
+  bool has_been_waited;           /* Whether parent has already waited */
+  struct list_elem elem;          /* Element for parent's children list */
+};
+
+/* Optional helper function to find thread by tid. */
+struct thread *get_thread_by_id(tid_t tid);
+
+void thread_yield_on_return(void);
+#endif
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
