@@ -33,7 +33,7 @@ void close_open_file(int fd_num);
 
 void halt (void);
 void exit (int);
-//pid_t exec (const char *cmdline);
+pid_t exec (const char *cmd_line);
 int wait (pid_t pid);
 
 bool create(const char* file_name, unsigned size);
@@ -99,14 +99,14 @@ syscall_handler (struct intr_frame *f)
 
   case SYS_EXEC: // 2
     {
-      /*void* cmdline;
+      void* cmd_line;
       if (!is_valid_ptr(f->esp + 4))
         fail_invalid_access();
 
-      cmdline = *(void **)(f->esp + 4);
-      int return_code = exec((const char*) cmdline);
+      cmd_line = *(void **)(f->esp + 4);
+      int return_code = exec((const char*) cmd_line);
       f->eax = (uint32_t) return_code;
-      break;*/
+      break;
     }
 
   case SYS_WAIT: // 3
@@ -267,20 +267,76 @@ void halt(void) {
 }
 
 void exit(int status) {
-  printf("%s: exit(%d)\n", thread_current()->name, status);
+  struct thread *cur = thread_current();
+  struct thread *parent = NULL;
+
+  cur->exit_status = status; 
+
+  printf("%s: exit(%d)\n", cur->name, status);
+
+  // 부모가 존재한다면 상태 업데이트
+  if (cur->parent_id != TID_ERROR) {
+    parent = get_thread_by_id(cur->parent_id);
+
+    if (parent != NULL) {
+      // 1. 락 획득
+      lock_acquire(&parent->lock_child);
+
+      // 2. 부모의 자식 리스트에서 현재 스레드의 child_status 찾기
+      struct list_elem *e;
+      for (e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
+        struct child_status *child = list_entry(e, struct child_status, elem);
+        if (child->tid == cur->tid) {
+          // 3. 자식 종료 상태 기록
+          child->exit_status = status;
+          child->exited = true;
+
+          // 4. cond_signal()로 부모 깨우기
+          cond_signal(&parent->cond_child, &parent->lock_child);
+          break;
+        }
+      }
+
+      // 5. 락 해제
+      lock_release(&parent->lock_child);
+    }
+  }
+
+  // 6. 프로세스 종료
   thread_exit();
 }
 
-/*pid_t exec(const char *cmdline) {
-  if (get_user((const uint8_t*) cmdline) == -1) {
-    fail_invalid_access();
-    tid_t child_tid = process_execute(cmdline);
-    return child_tid;
+pid_t exec(const char *cmd_line) {
+  tid_t tid = TID_ERROR;
+  struct thread *cur = thread_current();
+
+  // 1. 유저 포인터 유효성 검사
+  if (!is_valid_ptr(cmd_line)) {
+    exit(-1);
   }
 
-  tid_t child_tid = process_execute(cmdline);
-  return child_tid;
-}*/
+  // 2. 자식 로딩 상태 초기화
+  cur->child_load_status = 0;
+
+  // 3. 동기화 위해 락 획득
+  lock_acquire(&cur->lock_child);
+
+  // 4. 자식 프로세스 실행
+  tid = process_execute(cmd_line);
+
+  // 5. 자식 로딩 완료까지 기다림
+  while (cur->child_load_status == 0)
+    cond_wait(&cur->cond_child, &cur->lock_child);
+
+  // 6. 로딩 실패 시
+  if (cur->child_load_status == -1)
+    tid = TID_ERROR;
+
+  // 7. 락 해제
+  lock_release(&cur->lock_child);
+
+  return tid;
+}
 
 int wait(pid_t pid) {
   return process_wait(pid);
