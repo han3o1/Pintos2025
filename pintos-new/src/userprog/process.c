@@ -27,34 +27,35 @@ void argument_stack(const char* argv[], int argc, void **esp);
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *cmdline)
+process_execute (const char *file_name)
 {
-  char *cmdline_copy, *file_name;
+  char *file_name_copy, *exec_name;
   char *save_ptr;
   tid_t tid;
 
   /* Make a copy of CMD_LINE.
      Otherwise there's a race between the caller and load(). */
-  cmdline_copy = palloc_get_page (0);
-  if (cmdline_copy == NULL) return TID_ERROR;
-  strlcpy (cmdline_copy, cmdline, PGSIZE);
+     file_name_copy = palloc_get_page (0);
+  if (file_name_copy == NULL) return TID_ERROR;
+  strlcpy (file_name_copy, file_name, PGSIZE);
 
   // Extract file_name from cmdline. Should make a copy.
-  file_name = palloc_get_page (0);
-  if (file_name == NULL) {
-    palloc_free_page (cmdline_copy); /* don't leak */
+  exec_name = palloc_get_page (0);
+  if (exec_name == NULL) {
+    palloc_free_page (file_name_copy); /* don't leak */
     return TID_ERROR;
   }
-  strlcpy (file_name, cmdline, PGSIZE);
-  file_name = strtok_r(file_name, " ", &save_ptr);
+  strlcpy (exec_name, file_name, PGSIZE);
+  exec_name = strtok_r(exec_name, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, cmdline_copy);
+  tid = thread_create (exec_name, PRI_DEFAULT, start_process, file_name_copy);
 
   if (tid == TID_ERROR)
   {
-    palloc_free_page (file_name);
-    palloc_free_page (cmdline_copy);
+    palloc_free_page (exec_name);
+    palloc_free_page (file_name_copy);
+    return TID_ERROR;
   }
   return tid;
 }
@@ -84,6 +85,8 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp);
   argument_stack((const char **)tmp, cnt, &if_.esp); // pushing arguments into stack
 
+  struct thread *t = thread_current();
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success)
@@ -109,7 +112,7 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED)
+process_wait (tid_t child_tid)
 {
   // TODO : this is unimplemented version yet,
   // but process_wait should block the process for a while
