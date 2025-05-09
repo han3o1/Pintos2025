@@ -23,7 +23,7 @@ void close_open_file(int fd_num);
 
 void halt (void);
 void exit (int);
-//pid_t exec (const char *cmdline);
+pid_t exec (const char *cmdline);
 int wait (pid_t pid);
 
 bool create(const char* file_name, unsigned size);
@@ -89,14 +89,14 @@ syscall_handler (struct intr_frame *f)
 
   case SYS_EXEC: // 2
     {
-      /*void* cmdline;
+      void* cmdline;
       if (!is_valid_ptr(f->esp + 4))
         fail_invalid_access();
 
       cmdline = *(void **)(f->esp + 4);
       int return_code = exec((const char*) cmdline);
       f->eax = (uint32_t) return_code;
-      break;*/
+      break;
     }
 
   case SYS_WAIT: // 3
@@ -257,20 +257,66 @@ void halt(void) {
 }
 
 void exit(int status) {
+  struct thread *cur = thread_current();
+  struct thread *parent;
+
+  /* 1. 부모 정보 얻기 */
+  if (cur->parent_id != TID_ERROR) {
+    parent = get_thread_by_id(cur->parent_id);
+
+    if (parent != NULL) {
+      /* 3. 자식 상태 업데이트 */
+      lock_acquire(&parent->lock_child);
+      
+      // 자식 종료 상태 설정
+      cur->is_exit_called = true;  // 4-1. 자식이 종료되었음을 표시
+      cur->child_exit_status = status;  // 4-2. 자식의 종료 상태 기록
+      
+      /* 5. 부모에게 신호 보내기 */
+      cond_signal(&parent->cond_child, &parent->lock_child);
+      lock_release(&parent->lock_child);
+    }
+  }
+
+  /* 종료 처리 */
   printf("%s: exit(%d)\n", thread_current()->name, status);
+  // 6. Thread termination
   thread_exit();
 }
 
-/*pid_t exec(const char *cmdline) {
-  if (get_user((const uint8_t*) cmdline) == -1) {
-    fail_invalid_access();
-    tid_t child_tid = process_execute(cmdline);
-    return child_tid;
+pid_t exec(const char *cmdline) {
+  struct thread *cur = thread_current();  // 1-2. 현재 스레드 (부모 스레드)
+  tid_t child_tid;  // 1-1. 자식 프로세스의 tid를 저장할 변수 
+
+  // 2-1. cmdline이 유효한지 확인
+  if (get_user((const uint8_t *)cmdline) == -1) {
+    exit(-1);  // 2-2. 유효하지 않으면 현재 스레드를 종료
   }
 
-  tid_t child_tid = process_execute(cmdline);
-  return child_tid;
-}*/
+  // 3. 자식 프로세스의 로드 상태 초기화
+  cur->child_load_status = 0;
+
+  // 4-1. 새로운 프로세스 실행
+  child_tid = process_execute(cmdline);  // 4-2. 자식 프로세스의 tid 반환
+
+  // 5. 자식 프로세스의 로드 상태를 확인하기 위해 락을 획득
+  lock_acquire(&cur->lock_child);  // 현재 스레드의 lock_child 락을 획득
+
+  // 6. 자식 프로세스가 로드되기를 기다리기
+  while (cur->child_load_status == 0) {  // 자식이 로딩되지 않았으면 대기
+    cond_wait(&cur->cond_child, &cur->lock_child);  // 조건 변수로 대기
+  }
+  
+  // 7. 자식 프로세스의 로드 상태 확인
+  if (cur->child_load_status == -1) {
+    lock_release(&cur->lock_child);  // 락을 해제하고 종료
+    return -1;  // 자식 프로세스 로드 실패 시 -1 반환
+  }
+
+  // 8. 자식 프로세스 로드 성공 시 tid 반환
+  lock_release(&cur->lock_child);  // 락을 해제하고 종료
+  return child_tid; // 자식 프로세스의 tid를 반환
+} 
 
 int wait(pid_t pid) {
   return process_wait(pid);

@@ -80,6 +80,15 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
+
+// 자식 프로세스 상태 관리용 구조체
+struct child_status {
+   tid_t child_id;              // 자식 프로세스의 스레드 ID
+   bool is_exit_called;         // 자식 프로세스가 exit을 호출했는지 여부
+   bool has_been_waited;        // 부모가 자식을 기다렸는지 여부
+   struct list_elem elem;       // 부모의 자식 목록에 추가하기 위한 리스트 항목
+ };
+    
 struct thread
   {
     /* Owned by thread.c. */
@@ -105,6 +114,28 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
     struct list file_descriptors;       /* List of file_descriptors the thread contains */
     int next_fd;
+
+    /* 부모 스레드의 ID */
+    tid_t parent_id; 
+    
+    /* 자식 프로세스의 로딩 상태
+     * 0: 로딩되지 않음
+     * -1: 로딩 실패
+     * 1: 로딩 성공
+     */
+    int child_load_status;  
+    
+    /* 자식 프로세스를 기다리기 위한 락 */
+    struct lock lock_child;  
+    
+    /* 자식 프로세스를 위한 조건 변수 */
+    struct condition cond_child;  
+    
+    /* 자식 프로세스를 관리할 리스트 */
+    struct list children;   
+    
+    /* 현재 스레드의 실행 파일을 나타내는 파일 포인터 */
+    struct file *exec_file;  
 #endif
 
     /* Owned by thread.c. */

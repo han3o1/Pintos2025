@@ -34,8 +34,8 @@ process_execute (const char *file_name)
   tid_t tid;
 
   /* Make a copy of CMD_LINE.
-     Otherwise there's a race between the caller and load(). */
-     file_name_copy = palloc_get_page (0);
+  Otherwise there's a race between the caller and load(). */
+  file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL) return TID_ERROR;
   strlcpy (file_name_copy, file_name, PGSIZE);
 
@@ -57,6 +57,26 @@ process_execute (const char *file_name)
     palloc_free_page (file_name_copy);
     return TID_ERROR;
   }
+
+  /* 1. Initialize the child process status structure */
+  struct thread *cur = thread_current();  // Get the current thread (parent thread)
+
+  struct child_status *child = calloc(1, sizeof *child);  // Allocate memory for the child status structure
+  if (child == NULL) {
+    palloc_free_page(exec_name);
+    palloc_free_page(file_name_copy);
+    return TID_ERROR;
+  }
+
+  child->child_id = tid;  // Set child_id to the ID of the newly created thread
+  child->is_exit_called = false;  // Set is_exit_called to false
+  child->has_been_waited = false;  // Set has_been_waited to false
+
+  /* 2. Add the new child to the list of children */
+  list_push_back(&cur->children, &child->elem);  // Add the child's status to the parent's children list
+
+  /* 3. Cleanup and return */
+  palloc_free_page(exec_name);  // Release memory pages for exec_name
   return tid;
 }
 
@@ -72,21 +92,49 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+
   for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
       token = strtok_r(NULL, " ", &save_ptr))
   {
     tmp[cnt++] = token;
   }
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
   success = load (file_name, &if_.eip, &if_.esp);
   argument_stack((const char **)tmp, cnt, &if_.esp); // pushing arguments into stack
 
   struct thread *t = thread_current();
   t->next_fd = 3;
+
+  // 부모 프로세스와 상호작용
+  if (t->parent_id != TID_ERROR) {
+    struct thread *parent = get_thread_by_id(t->parent_id);  // 부모 스레드 가져오기
+
+    if (parent != NULL) {  // 부모 스레드가 존재하면 진행
+      // 74-2. 부모와 동기화
+      lock_acquire(&parent->lock_child);
+
+      // 74-1. 자식 프로세스의 로드 상태 설정
+      if (success) {
+        t->child_load_status = 1;  // 로드 성공
+      } else {
+        t->child_load_status = -1; // 로드 실패
+      }
+
+      // 74-3. 부모에게 로드 상태를 알림
+      cond_signal(&parent->cond_child, &parent->lock_child);  // 부모에게 신호 보내기 
+
+      lock_release(&parent->lock_child);
+    } else {
+      // 부모가 없으면 오류 처리 또는 종료 처리
+      t->child_load_status = -1;  // 부모가 없으면 실패 처리
+    }
+  }
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -115,16 +163,47 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid)
 {
-  // TODO : this is unimplemented version yet,
-  // but process_wait should block the process for a while
-  // to prevent the pintos kernel from shutting down.
-  volatile int i;
-  for (i = 0; i < 1000000000; i++)
-  {
-    
+  struct thread *t = thread_current ();
+  struct list *child_list = &(t->children);
+  struct list_elem *it = NULL;
+  struct thread *child_thread = NULL;
+
+  if (!list_empty(child_list)) {
+    for (it = list_front(child_list); it != list_end(child_list); it = list_next(it)) {
+      child_thread = list_entry(it, struct thread, allelem);  // child_thread는 리스트에서 해당 항목에 대한 스레드 정보
+
+      // child_tid를 사용하여 자식 스레드를 찾음
+      if(child_thread->tid == child_tid) { // OK, the direct child found
+        break;
+      }
+    }
   }
 
-  return -1;
+  // if child process is not found, return -1 immediately
+  if (child_thread == NULL) {
+    _DEBUG_PRINTF("[DEBUG] wait(): child not found, pid = %d\n", child_tid);
+    return -1;
+  }
+
+  if (child_thread->child_load_status == -1) {
+    // already waiting (the parent already called wait on child's pid)
+    _DEBUG_PRINTF("[DEBUG] wait(): child found, pid = %d, but it is already waiting\n", child_tid);
+    return -1; // a process may wait for any fixed child at most once
+  }
+
+  // 자식 스레드가 종료될 때까지 대기
+  while (child_thread->child_load_status != 1) {
+    sema_down(&child_thread->lock_child);  // 자식 스레드가 종료될 때까지 대기
+  }
+
+  // 자식 스레드 종료 상태를 반환
+  int exit_status = child_thread->child_exit_status;
+
+  // 자식 스레드를 자식 리스트에서 제거
+  list_remove(it);
+
+  // 대기 후 종료 상태 반환
+  return exit_status;
 }
 
 /* Free the current process's resources. */
@@ -136,6 +215,7 @@ process_exit (void)
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
+  /* 2. 현재 프로세스의 페이지 디렉토리 삭제 및 커널 디렉토리로 복귀 */   
   pd = cur->pagedir;
   if (pd != NULL)
     {
@@ -150,6 +230,43 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  /* 3. 자식 프로세스 관련 처리 */
+  struct list_elem *e;
+  for (e = list_begin (&cur->children); e != list_end (&cur->children); e = list_next (e))
+  {
+    struct child_status *child = list_entry (e, struct child_status, elem);
+    
+    /* 2.1. 자식 프로세스 정리 */
+    list_remove(e);
+    palloc_free_page(child); // 자식 프로세스 정보 메모리 해제
+  }
+
+  /* 3. 파일 수정 허용 (파일을 쓸 수 있게) */
+  file_allow_write(cur->exec_file);
+
+  /* 4. 부모 프로세스와 동기화 */
+  if (cur->parent_id != TID_ERROR)
+  {
+    struct thread *parent = get_thread_by_id(cur->parent_id);  // 부모 스레드 가져오기
+      
+    if (parent != NULL) {
+      // 부모의 락을 획득하여 자식 프로세스 종료 상태를 전달
+      lock_acquire(&parent->lock_child);
+  
+      // 자식의 종료 상태를 전달
+      if (cur->child_load_status == -1) {
+        cur->child_load_status = -1;  // 로드 실패 처리
+      } else {
+        cur->child_load_status = 1;   // 로드 성공 처리
+      }
+  
+      cond_signal(&parent->cond_child, &parent->lock_child);  // 부모에게 신호 보내기
+      lock_release(&parent->lock_child);  // 부모 락 해제
+    }
+  }
+  /* 5. 프로세스 종료 */
+  thread_exit ();  // 현재 스레드 종료
 }
 
 /* Sets up the CPU for running user code in the current

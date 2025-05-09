@@ -144,6 +144,12 @@ page_fault (struct intr_frame *f)
   /* Count page faults. */
   page_fault_cnt++;
 
+  /* Check if the fault address is valid. If not, exit. */
+  if (!is_valid_user_vaddr(fault_addr)) {
+   /* Exit the process if the fault address is invalid */
+   exit(-1);
+  }
+  
   /* Determine cause. */
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;

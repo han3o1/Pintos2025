@@ -229,6 +229,11 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  /* Set parent thread ID */
+  #ifdef USERPROG
+    t->parent_id = thread_current()->tid;  // 부모 스레드의 tid를 설정
+  #endif
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -592,13 +597,18 @@ init_thread (struct thread *t, const char *name, int priority)
   t->sleep_endtick = 0;
   t->magic = THREAD_MAGIC;
 
+  #ifdef USERPROG
+  t->parent_id = TID_ERROR;  // 부모 프로세스의 ID, 초기화는 TID_ERROR로 설정
+  t->child_load_status = 0;  // 자식 프로세스의 로딩 상태 초기화 (0: 로딩되지 않음)
+  lock_init(&t->lock_child);  // 자식 스레드의 락 초기화
+  cond_init(&t->cond_child);  // 자식 스레드의 조건 변수 초기화
+  list_init(&t->children);    // 자식 프로세스 리스트 초기화
+  list_init(&t->file_descriptors);
+  #endif
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
-
-#ifdef USERPROG
-  list_init(&t->file_descriptors);
-#endif
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
