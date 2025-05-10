@@ -113,30 +113,37 @@ sema_try_down (struct semaphore *sema)
 void
 sema_up (struct semaphore *sema)
 {
+  // Disable interrupts and save current interrupt level
   enum intr_level old_level;
   struct thread *target = NULL;
 
   ASSERT (sema != NULL);
 
+  // Temporarily disable interrupts for atomicity
   old_level = intr_disable ();
 
+  // Increase the semaphore's value
   sema->value++;
 
+  // If there are threads waiting on the semaphore
   if (!list_empty (&sema->waiters)) {
+    // Sort waiters list by thread priority (highest first)
     list_sort(&(sema->waiters), comparator_greater_thread_priority, NULL);
 
-    // the thread of highest priority (in sema waiters) should wake up
+    // Get the thread with the highest priority and remove from the list
     target = list_entry (list_pop_front (&sema->waiters), struct thread, elem);
-    thread_unblock (target);
+    thread_unblock (target); // Unblock the selected thread
 
-    // 우선순위가 높은 스레드가 있으면 현재 스레드가 양보한다
+    // If there is a thread with higher priority, the current thread yields.
     if (target->priority > thread_current()->priority) {
       thread_yield();
     }
   }
 
+  // Restore previous interrupt level
   intr_set_level (old_level);
 
+  // Yield on return if needed (deferred yield)
   if (target != NULL && target->priority > thread_current()->priority)
     thread_yield_on_return();
 }

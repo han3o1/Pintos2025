@@ -144,12 +144,6 @@ page_fault (struct intr_frame *f)
 
   /* Count page faults. */
   page_fault_cnt++;
-
-  /* Check if the fault address is valid. If not, exit. */
-  if (!is_valid_user_vaddr(fault_addr)) {
-   /* Exit the process if the fault address is invalid */
-   exit(-1);
-  }
   
   /* Determine cause. */
   not_present = (f->error_code & PF_P) == 0;
@@ -164,8 +158,9 @@ page_fault (struct intr_frame *f)
     return;
   }
 
+  /* If the fault address is NULL or outside the user address space, terminate the process. */
   if (fault_addr == NULL || !is_user_vaddr(fault_addr)) {
-    exit(-1);
+    exit(-1); // Kill the process if the address is invalid
   }
 
   /* To implement virtual memory, delete the rest of the function
@@ -176,6 +171,6 @@ page_fault (struct intr_frame *f)
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  exit (-1);
+  exit (-1);  // Terminate process due to page fault
 }
 
