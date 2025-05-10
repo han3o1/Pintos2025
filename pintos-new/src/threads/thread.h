@@ -149,6 +149,7 @@ struct child_status
 /* Optional helper function to find thread by tid. */
 struct thread *get_thread_by_id(tid_t tid);
 
+// Request a context switch after returning from the current function or interrupt
 void thread_yield_on_return(void);
 #endif
 
