@@ -231,7 +231,7 @@ thread_create (const char *name, int priority,
   tid = t->tid = allocate_tid ();
 
 #ifdef USERPROG
-  /* 현재 스레드를 부모로 설정 */
+  /* Set parent thread ID */
   t->parent_id = thread_current()->tid;
 #endif
 
@@ -603,16 +603,15 @@ init_thread (struct thread *t, const char *name, int priority)
   intr_set_level (old_level);
 
 #ifdef USERPROG
-  list_init(&t->file_descriptors);
-  t->executing_file = NULL;
+list_init(&t->file_descriptors);  // Initialize list for file descriptors
+t->executing_file = NULL;  // Initialize currently executing file to NULL
 
-  /* 부모-자식 구조 관련 필드 초기화 */
-  t->parent_id = TID_ERROR;           // 일단 초기값은 TID_ERROR로 설정
-  t->child_load_status = 0;           // 아직 load 전
-  lock_init(&t->lock_child);
-  cond_init(&t->cond_child);
-  list_init(&t->children);
-  t->exec_file = NULL;
+t->parent_id = TID_ERROR;  // Set default parent thread ID      
+t->child_load_status = 0;  // Initialize child load status         
+lock_init(&t->lock_child);  // Initialize lock for parent-child sync
+cond_init(&t->cond_child);  // Initialize condition variable for child
+list_init(&t->children);  // Initialize child list
+t->exec_file = NULL;  // Initialize exec_file to NULL
 #endif
 }
 
@@ -757,9 +756,9 @@ struct thread *get_thread_by_id(tid_t tid) {
 
 void thread_yield_on_return(void) {
   if (intr_context()) {
-    intr_yield_on_return();  // interrupt context에서는 예약만
+    intr_yield_on_return();  // Schedule a thread switch when returning from interrupt
   } else {
-    thread_yield();          // thread context에서는 즉시 yield
+    thread_yield();          // Yield CPU immediately if in thread context
   }
 }
 

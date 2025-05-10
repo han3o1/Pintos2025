@@ -33,13 +33,21 @@ process_execute (const char *file_name)
   char *save_ptr;
   tid_t tid;
 
-  /* Make a copy of CMD_LINE.
-     Otherwise there's a race between the caller and load(). */
+  /* 
+   * 1. File name parsing:
+   *    - Make a copy of file_name to avoid race conditions 
+   *      between the caller and load().
+   */
   file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL) return TID_ERROR;
   strlcpy (file_name_copy, file_name, PGSIZE);
 
-  // Extract file_name from cmdline. Should make a copy.
+  /*
+   *  - Create a second copy for extracting the actual executable name.
+   *  - Use strtok_r() with space (" ") as the delimiter 
+   *    to get the first token, which is the program name.
+   *    e.g., input: "bin/ls -l foo" → output: "bin/ls"
+   */
   exec_name = palloc_get_page (0);
   if (exec_name == NULL) {
     palloc_free_page (file_name_copy); /* don't leak */
@@ -48,33 +56,41 @@ process_execute (const char *file_name)
   strlcpy (exec_name, file_name, PGSIZE);
   exec_name = strtok_r(exec_name, " ", &save_ptr);
 
-  /* Create a new thread to execute FILE_NAME. */
+  /* 
+   * 2. Create a new thread:
+   *    - Create a new thread using thread_create()
+   *      with the parsed program name (exec_name).
+   *    - The function start_process will be executed in the new thread,
+   *      and file_name_copy is passed as its argument.
+   */
   tid = thread_create (exec_name, PRI_DEFAULT, start_process, file_name_copy);
 
   if (tid == TID_ERROR)
   {
+    // If thread creation fails, free both allocated pages
     palloc_free_page (exec_name);
     palloc_free_page (file_name_copy);
     return TID_ERROR;
   }
 
-  #ifdef USERPROG
-  // 자식 관리 구조체 생성 및 초기화
+#ifdef USERPROG
+  // Allocate and initialize a child_status struct for the new child thread.
   struct child_status *child = calloc(1, sizeof(struct child_status));
   if (child == NULL)
     return TID_ERROR;
 
-  child->tid = tid;
-  child->exit_status = -1;
-  child->exited = false;
-  child->has_been_waited = false;
+  child->tid = tid;  // Set the child's thread ID
+  child->exit_status = -1;  // Default exit status
+  child->exited = false;  // Child has not exited yet
+  child->has_been_waited = false; // Not yet waited by parent
 
   // 부모의 자식 리스트에 등록
   struct thread *cur = thread_current();
-  list_push_back(&cur->children, &child->elem);
+  list_push_back(&cur->children, &child->elem);  // Add child to current thread's child list
 #endif
 
-  palloc_free_page(exec_name); // exec_name은 더 이상 필요 없으므로 해제
+  // Free the exec_name page (no longer needed after thread_create)
+  palloc_free_page(exec_name);
 
   return tid;
 }
@@ -84,31 +100,48 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char* tmp[50];
-  char* token;
-  char* save_ptr;
-  int cnt = 0;
+  char* tmp[50];  // To store parsed arguments (argv)
+  char* token;   // Current token from command line
+  char* save_ptr;  // Pointer used by strtok_r
+  int cnt = 0;  // Argument count (argc)
   char *file_name = file_name_;
-  struct intr_frame if_;
+  struct intr_frame if_;  // Interrupt frame to simulate user return
   bool success;
+
+  /*
+   * 1. Parse the arguments:
+   * - Split file_name_ by space using strtok_r()
+   * - Store tokens into tmp[] as argv[]
+   * - Count the number of arguments (argc)
+   */
   for (token = strtok_r(file_name, " ", &save_ptr); token != NULL;
       token = strtok_r(NULL, " ", &save_ptr))
   {
     tmp[cnt++] = token;
   }
-  /* Initialize interrupt frame and load executable. */
+
+  /*
+   * 2. Initialize the interrupt frame:
+   * - Set segment selectors and flags for user mode
+   */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
-  argument_stack((const char **)tmp, cnt, &if_.esp); // pushing arguments into stack
+
+  /*
+   * 3. Load the executable file:
+   * - Pass the first token (program name) to load()
+   * - If successful, prepare the user stack with argument_stack()
+   */
+  success = load (file_name, &if_.eip, &if_.esp);  // load "bin/ls", for example
+  argument_stack((const char **)tmp, cnt, &if_.esp);  // pushing arguments into stack
 
   struct thread *t = thread_current();
-  t->next_fd = 3;
+  t->next_fd = 3;  // File descriptors 0, 1, 2 are reserved (stdin, stdout, stderr)
 
-  #ifdef USERPROG
-  // 부모에게 로딩 상태 전달
+#ifdef USERPROG
+  // Notify parent thread about load success or failure
   struct thread *parent = get_thread_by_id(t->parent_id);
   if (parent != NULL) {
     lock_acquire(&parent->lock_child);
@@ -118,7 +151,10 @@ start_process (void *file_name_)
   }
 #endif
 
-  /* If load failed, quit. */
+  /*
+   * 4. Handle load failure:
+   * - If loading failed, free file_name page and exit the thread
+   */
   palloc_free_page (file_name);
   if (!success)
     thread_exit ();
@@ -150,7 +186,7 @@ process_wait (tid_t child_tid)
   struct child_status *cs = NULL;
   int exit_status = -1;
 
-  // 1. 자식 리스트에서 child_tid에 해당하는 자식 찾기
+  // Search for the child thread with the given child_tid in the current thread's child list
   for (e = list_begin(&cur->children); e != list_end(&cur->children); e = list_next(e)) {
     struct child_status *entry = list_entry(e, struct child_status, elem);
     if (entry->tid == child_tid) {
@@ -159,31 +195,31 @@ process_wait (tid_t child_tid)
     }
   }
 
-  // 2. 자식이 없다면 실패
+  // If the child thread is not found, return -1
   if (cs == NULL)
     return -1;
 
-  // 3. 이미 기다렸던 자식이면 실패
+  // If the child has already been waited on, return -1
   if (cs->has_been_waited)
     return -1;
 
+  // Mark that we are now waiting on this child
   cs->has_been_waited = true;
 
-  // 4. 자식이 아직 종료되지 않았다면 기다림
-  lock_acquire(&cur->lock_child);
+  lock_acquire(&cur->lock_child); // Acquire the lock for synchronization with the child
+  // If the child hasn't exited yet, wait on the condition variable
   while (!cs->exited) {
     cond_wait(&cur->cond_child, &cur->lock_child);
   }
 
-  // 5. 자식의 종료 상태를 받아옴
-  exit_status = cs->exit_status;
-  lock_release(&cur->lock_child);
+  exit_status = cs->exit_status; // Get the exit status of the child
+  lock_release(&cur->lock_child); // Release the lock
 
-  // 6. 자식 정보 리스트에서 제거하고 메모리 해제
+  // Remove the child from the list and free the memory
   list_remove(&cs->elem);
   free(cs);
 
-  return exit_status;
+  return exit_status; // Return the child's exit status
 }
 
 /* Free the current process's resources. */
@@ -193,38 +229,41 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  /* 1. 자식 리스트 정리 */
+  // Free all child_status entries in the current thread's child list
   struct list_elem *e, *next;
   for (e = list_begin(&cur->children); e != list_end(&cur->children); e = next) {
     next = list_next(e);
     struct child_status *child = list_entry(e, struct child_status, elem);
-    list_remove(e);
-    free(child); // 자식 상태 메모리 해제
+    list_remove(e);  // Remove from list
+    free(child);  // Free memory
   }
 
-  /* 2. 실행 중인 파일 쓰기 허용 및 닫기 */
+  // If the current process has an open executable file
   if (cur->exec_file != NULL) {
-    file_allow_write(cur->exec_file);
-    file_close(cur->exec_file);
-    cur->exec_file = NULL;
+    file_allow_write(cur->exec_file);  // Allow writing to the executable file
+    file_close(cur->exec_file);  // Close the executable file
+    cur->exec_file = NULL;  // Clear the pointer
   }
 
-  /* 3. 부모에게 종료 상태 통보 */
+  // If this process has a parent
   if (cur->parent_id != TID_ERROR) {
     struct thread *parent = get_thread_by_id(cur->parent_id);
     if (parent != NULL) {
-      lock_acquire(&parent->lock_child);
+      lock_acquire(&parent->lock_child); // Lock the parent-child shared data
+
+      // Find this child in the parent’s children list
       struct list_elem *e;
       for (e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
         struct child_status *child = list_entry(e, struct child_status, elem);
         if (child->tid == cur->tid) {
-          child->exit_status = cur->exit_status;  // exit()에서 설정되었을 것
-          child->exited = true;
-          cond_signal(&parent->cond_child, &parent->lock_child);
+          child->exit_status = cur->exit_status; // Store exit status
+          child->exited = true; // Mark child as exited
+          cond_signal(&parent->cond_child, &parent->lock_child); // Wake up waiting parent
           break;
         }
       }
-      lock_release(&parent->lock_child);
+
+      lock_release(&parent->lock_child); // Release the lock
     }
   }
 
@@ -562,36 +601,63 @@ argument_stack(const char* argv[], int argc, void **esp)
 {
   int i;
   int len = 0;
-  int argv_addr[argc];
+  int argv_addr[argc]; // To store each argument's stack address
+
+  /*
+   * 1. Copy the arguments to the stack
+   * - Copy each argv[i] string to the stack using memcpy()
+   * - Since stack grows downward, copy from end to start
+   * - Save each argument's address into argv_addr[]
+   */
   for (i = 0; i < argc; i++) {
     len = strlen(argv[i]) + 1;
-    *esp -= len;
-    memcpy(*esp, argv[i], len);
-    argv_addr[i] = (int)*esp;
-  }
+    *esp -= len;  // Move stack pointer
+    memcpy(*esp, argv[i], len);  // Copy string onto stack
+    argv_addr[i] = (int)*esp;  // Store address of argv[i]
+  }  
 
-  // word align
+  /*
+   * 2. Word alignment
+   * - Align the stack pointer to a multiple of 4 (32-bit word boundary)
+   * - This improves memory access performance in 32-bit Pintos
+   */
   *esp = (void *)((int)*esp & 0xfffffffc);
 
-  // last null
+  /*
+   * 3. Add a NULL pointer
+   * - Push 0 onto the stack to indicate the end of the argv[] list
+   */  
   *esp -= 4;
   *(int*)*esp = 0;
 
-  // setting **esp with argvs
+  /*
+   * 4. Set the argument addresses on the stack
+   * - Push each argv[i]'s address in reverse order
+   * - This forms the argv[] array on the stack
+   */  
   for (i = argc - 1; i >= 0; i--) {
     *esp -= 4;
     *(int*)*esp = argv_addr[i];
   }
 
-  // setting **argv
+  /*
+   * 5. Push the address of argv[]
+   * - Push a pointer to the first element of argv[] (i.e., &argv[0])
+   */
   *esp -= 4;
   *(int*)*esp = (int)*esp + 4;
 
-  // setting argc
+  /*
+   * 6. Push argc
+   * - Push the number of arguments onto the stack
+   */
   *esp -= 4;
   *(int*)*esp = argc;
 
-  // setting ret
+  /*
+   * 7. Push return address
+   * - Push 0 to simulate a return address (not used here)
+   */
   *esp -= 4;
   *(int*)*esp = 0;
 }

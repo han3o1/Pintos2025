@@ -132,6 +132,7 @@ sema_up (struct semaphore *sema)
 
   intr_set_level (old_level);
 
+  // Yield on return if needed (deferred yield)
   if (target != NULL && target->priority > thread_current()->priority)
     thread_yield_on_return();
 }

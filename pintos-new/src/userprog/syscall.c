@@ -22,9 +22,9 @@ struct
 file_descriptor 
 {
   int fd_num;                 // File descriptor number
-  tid_t owner;                // 소유자
-  struct file *file_struct;   // 실제 파일 객체 포인터
-  struct list_elem elem;      // 리스트 연결용 엘리먼트
+  tid_t owner;                // Owner thread ID
+  struct file *file_struct;   // Pointer to the actual file object
+  struct list_elem elem;      // List element for linking in descriptor list
 };
 
 static struct file_descriptor* get_open_file(int fd_num);
@@ -51,8 +51,10 @@ struct lock filesys_lock;
 void
 syscall_init (void)
 {
-  lock_init(&filesys_lock);
+  lock_init(&filesys_lock); // Initialize the file system lock to ensure thread-safe access to files
 
+  // Register system call interrupt handler (interrupt number 0x30)
+  // Priority = 3, Interrupts enabled, Handler = syscall_handler, Name = "syscall"
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
@@ -70,510 +72,657 @@ syscall_handler (struct intr_frame *f)
 
   ASSERT(sizeof(syscall_number) == 4 ); // assuming x86
 
-  // The system call number is in the 32-bit word at the caller's stack pointer.
+  /*
+   * 1. Stack pointer validation
+   * - Check if the user stack pointer is valid
+   * - It must point to a valid user address
+   */
   if (!is_valid_ptr(f->esp))
     fail_invalid_access();
+  
+  /*
+   * 2. Extract system call number
+   * - The system call number is located at the top of the stack (at f->esp)
+   */
   syscall_number = *(int *)(f->esp);
 
-  // Dispatch w.r.t system call number
-  // SYS_*** constants are defined in syscall-nr.h
+  /*
+   * 3. System call processing
+   * - Dispatch system call by number using a switch-case
+   * - For each case, validate the pointer to arguments (f->esp + 4, etc.)
+   * - Extract arguments and call the corresponding system call function
+   */
   switch (syscall_number) {
-  case SYS_HALT: // 0
-    {
-      halt();
-      NOT_REACHED();
+    case SYS_HALT: // 0
+      {
+        halt();                     // Terminates the OS
+        NOT_REACHED();              // Should never reach here after halt
+        break;
+      }
+
+    case SYS_EXIT: // 1
+      {
+        int exitcode;
+        // Validate the user pointer to prevent invalid memory access
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+
+        exitcode = *(int *)(f->esp + 4);  // Get exit status from user stack
+        exit(exitcode);                   // Terminate the current process
+        NOT_REACHED();
+        break;
+      }
+
+    case SYS_EXEC: // 2
+      {
+        void* cmd_line;
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+        
+        cmd_line = *(void **)(f->esp + 4);               // Read the command line string address from user stack
+        int return_code = exec((const char*) cmd_line);  // Execute the command line and return the new process's TID
+        f->eax = (uint32_t) return_code;                 // Return TID (or -1) to user program
+        break;
+      }
+
+    case SYS_WAIT: // 3
+      {
+        pid_t pid;
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+
+        pid = *(pid_t *)(f->esp + 4);      // Get PID to wait on
+        f->eax = (uint32_t) wait(pid);     // Return child's exit status
+        break;
+      }
+    
+    case SYS_CREATE: // 4
+      {
+        const char* file_name;
+        unsigned size;
+        bool return_code;
+
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+        if (!is_valid_ptr(f->esp + 8))
+          fail_invalid_access();
+
+        file_name = *(const char **)(f->esp + 4);  // Get file name
+        size = *(unsigned *)(f->esp + 8);          // Get initial size
+        return_code = create(file_name, size);     // Create the file
+        f->eax = return_code;                      // Return true/false
+        break;
+      }
+    
+    case SYS_REMOVE: // 5
+      {
+        const char* file_name;
+        bool return_code;
+
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+
+        file_name = *(const char **)(f->esp + 4);  // Get file name
+        return_code = remove(file_name);          // Attempt to remove file
+        f->eax = return_code;                     // Return true/false
+        break;
+      }  
+    
+    case SYS_OPEN: // 6
+      {
+        const char* file_name;
+        int return_code;
+
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+        
+        file_name = *(const char **)(f->esp + 4);  // Get file name
+        return_code = open(file_name);            // Open the file
+        f->eax = return_code;                     // Return file descriptor or -1
+        break;
+      }
+    
+    case SYS_FILESIZE: // 7
+      {
+        int fd, return_code;
+
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+
+        fd = *(int *)(f->esp + 4);           // Get file descriptor
+        return_code = filesize(fd);          // Get file size
+        f->eax = return_code;                // Return size
+        break;
+      }
+    
+    case SYS_READ: // 8
+      {
+        int fd, return_code;
+        void *buffer;
+        unsigned size;
+
+        if (!is_valid_ptr(f->esp + 4)) fail_invalid_access();
+        if (!is_valid_ptr(f->esp + 8)) fail_invalid_access();
+        if (!is_valid_ptr(f->esp + 12)) fail_invalid_access();
+
+        fd = *(int *)(f->esp + 4);              // Get file descriptor
+        buffer = *(void **)(f->esp + 8);        // Get buffer pointer
+        size = *(unsigned *)(f->esp + 12);      // Get size to read
+        return_code = read(fd, buffer, size);   // Read from file
+        f->eax = (uint32_t) return_code;        // Return number of bytes read
+        break;
+      }
+    
+    case SYS_WRITE: // 9
+      {
+        int fd;
+        const void *buffer;
+        unsigned size;
+
+        if (!is_valid_ptr(f->esp + 4)) fail_invalid_access();
+        if (!is_valid_ptr(f->esp + 8)) fail_invalid_access();
+        if (!is_valid_ptr(f->esp + 12)) fail_invalid_access();
+
+        fd = *(int *)(f->esp + 4);              // Get file descriptor
+        buffer = *(void **)(f->esp + 8);        // Get buffer pointer
+        size = *(unsigned *)(f->esp + 12);      // Get size to write
+
+        int return_code = write(fd, buffer, size);  // Write to file
+        f->eax = (uint32_t) return_code;            // Return number of bytes written
+        break;
+      }
+
+    case SYS_SEEK: // 10
+      {
+        int fd;
+        unsigned position;
+
+        if (!is_valid_ptr(f->esp + 4)) fail_invalid_access();
+        if (!is_valid_ptr(f->esp + 8)) fail_invalid_access();
+
+        fd = *(int *)(f->esp + 4);          // Get file descriptor
+        position = *(unsigned *)(f->esp + 8);  // Get new position
+        seek(fd, position);                 // Set file position
+        break;
+      }
+    
+    case SYS_TELL: // 11
+      {
+        int fd;
+        unsigned return_code;
+
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+        
+        fd = *(int *)(f->esp + 4);         // Get file descriptor
+        return_code = tell(fd);           // Get current file position
+        f->eax = (uint32_t) return_code;  // Return position
+        break;
+      }
+
+    case SYS_CLOSE: // 12
+      {
+        int fd;
+
+        if (!is_valid_ptr(f->esp + 4))
+          fail_invalid_access();
+
+        fd = *(int *)(f->esp + 4);   // Get file descriptor
+        close(fd);                  // Close the file
+        break;
+      }
+
+    default:
+      exit (-1); // If unknown syscall number, terminate process
       break;
-    }
-
-  case SYS_EXIT: // 1
-    {
-      int exitcode;
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-
-      exitcode = *(int *)(f->esp + 4);
-      exit(exitcode);
-      NOT_REACHED();
-      break;
-    }
-
-  case SYS_EXEC: // 2
-    {
-      void* cmd_line;
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-
-      cmd_line = *(void **)(f->esp + 4);
-      int return_code = exec((const char*) cmd_line);
-      f->eax = (uint32_t) return_code;
-      break;
-    }
-
-  case SYS_WAIT: // 3
-    {
-      pid_t pid;
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-
-      pid = *(pid_t *)(f->esp + 4);
-      f->eax = (uint32_t) wait(pid);
-      break;
-    }
-  
-  case SYS_CREATE: // 4
-    {
-      const char* file_name;
-      unsigned size;
-      bool return_code;
-
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-      if (!is_valid_ptr(f->esp + 8))
-        fail_invalid_access();
-
-      file_name = *(const char **)(f->esp + 4);
-      size = *(unsigned *)(f->esp + 8);
-      return_code = create(file_name, size);
-      f->eax = return_code;
-      break;
-    }
-  
-  case SYS_REMOVE: // 5
-    {
-      const char* file_name;
-      bool return_code;
-
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-
-      file_name = *(const char **)(f->esp + 4);
-      return_code = remove(file_name);
-      f->eax = return_code;
-      break;
-    }  
-  
-  case SYS_OPEN: // 6
-    {
-      const char* file_name;
-      int return_code;
-
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-      
-      file_name = *(const char **)(f->esp + 4);
-      return_code = open(file_name);
-      f->eax = return_code;
-      break;
-    }
-  
-  case SYS_FILESIZE: // 7
-    {
-      int fd, return_code;
-
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-
-      fd = *(int *)(f->esp + 4);
-      return_code = filesize(fd);
-      f->eax = return_code;
-      break;
-    }
-  
-  case SYS_READ: // 8
-    {
-      int fd, return_code;
-      void *buffer;
-      unsigned size;
-
-      if (!is_valid_ptr(f->esp + 4)) fail_invalid_access();
-      if (!is_valid_ptr(f->esp + 8)) fail_invalid_access();
-      if (!is_valid_ptr(f->esp + 12)) fail_invalid_access();
-
-      fd = *(int *)(f->esp + 4);
-      buffer = *(void **)(f->esp + 8);
-      size = *(unsigned *)(f->esp + 12);
-      return_code = read(fd, buffer, size);
-      f->eax = (uint32_t) return_code;
-      break;
-    }
-  
-  case SYS_WRITE: // 9
-    {
-      int fd;
-      const void *buffer;
-      unsigned size;
-
-      if (!is_valid_ptr(f->esp + 4)) fail_invalid_access();
-      if (!is_valid_ptr(f->esp + 8)) fail_invalid_access();
-      if (!is_valid_ptr(f->esp + 12)) fail_invalid_access();
-
-      fd = *(int *)(f->esp + 4);
-      buffer = *(void **)(f->esp + 8);
-      size = *(unsigned *)(f->esp + 12);
-
-      int return_code = write(fd, buffer, size);
-      f->eax = (uint32_t) return_code;
-      break;
-    }
-
-  case SYS_SEEK: // 10
-    {
-      int fd;
-      unsigned position;
-
-      if (!is_valid_ptr(f->esp + 4)) fail_invalid_access();
-      if (!is_valid_ptr(f->esp + 8)) fail_invalid_access();
-
-      fd = *(int *)(f->esp + 4);
-      position = *(unsigned *)(f->esp + 8);
-      seek(fd, position);
-      break;
-    }
-  
-  case SYS_TELL: // 11
-    {
-      int fd;
-      unsigned return_code;
-
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-      
-      fd = *(int *)(f->esp + 4);
-      return_code = tell(fd);
-      f->eax = (uint32_t) return_code;
-      break;
-    }
-
-  case SYS_CLOSE: // 12
-    {
-      int fd;
-
-      if (!is_valid_ptr(f->esp + 4))
-        fail_invalid_access();
-
-      fd = *(int *)(f->esp + 4);
-      close(fd);
-      break;
-    }
-
-  default:
-    exit (-1);
-    break;
   }
 }
 
+/*
+ * Halts the entire operating system by powering off the machine.
+ * This function does not return.
+ */
 void halt(void) {
-  shutdown_power_off();
+  shutdown_power_off();  // Powers off the machine immediately
 }
 
+/*
+ * Terminates the current user program and returns status to the kernel.
+ * Also updates the parent's record of this process if applicable.
+ */
 void exit(int status) {
-  struct thread *cur = thread_current();
-  struct thread *parent = NULL;
+  struct thread *cur = thread_current();        // Get the currently running thread
+  struct thread *parent = NULL;                 // Initialize parent pointer
 
-  cur->exit_status = status; 
+  cur->exit_status = status;                    // Save exit status to current thread
 
-  printf("%s: exit(%d)\n", cur->name, status);
+  printf("%s: exit(%d)\n", cur->name, status);  // Print thread name and exit code to console
 
-  // 부모가 존재한다면 상태 업데이트
+  // If the thread has a parent (not an initial process)
   if (cur->parent_id != TID_ERROR) {
-    parent = get_thread_by_id(cur->parent_id);
+    parent = get_thread_by_id(cur->parent_id);  // Look up the parent thread using its ID
 
     if (parent != NULL) {
-      // 1. 락 획득
-      lock_acquire(&parent->lock_child);
+      lock_acquire(&parent->lock_child);        // Acquire lock to safely access parent's children list
 
-      // 2. 부모의 자식 리스트에서 현재 스레드의 child_status 찾기
+      // Iterate over the parent's children list
       struct list_elem *e;
-      for (e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
-        struct child_status *child = list_entry(e, struct child_status, elem);
-        if (child->tid == cur->tid) {
-          // 3. 자식 종료 상태 기록
-          child->exit_status = status;
-          child->exited = true;
+      for (e = list_begin(&parent->children); 
+           e != list_end(&parent->children); 
+           e = list_next(e)) {
 
-          // 4. cond_signal()로 부모 깨우기
-          cond_signal(&parent->cond_child, &parent->lock_child);
-          break;
+        struct child_status *child = list_entry(e, struct child_status, elem);  // Access child_status struct
+
+        if (child->tid == cur->tid) {           // If the entry matches this thread
+          child->exit_status = status;          // Store the exit status
+          child->exited = true;                 // Mark the child as exited
+          cond_signal(&parent->cond_child, &parent->lock_child);  // Wake up parent if it's waiting
+          break;                                // Done updating this child
         }
       }
 
-      // 5. 락 해제
-      lock_release(&parent->lock_child);
+      lock_release(&parent->lock_child);        // Release lock after modifying shared data
     }
   }
 
-  // 6. 프로세스 종료
-  thread_exit();
+  thread_exit();                                // Terminate the current thread and clean up resources
 }
 
+/*
+ * Executes a new user process from the given command line.
+ * Synchronizes with the child to ensure it loads correctly.
+ * Returns the child thread ID (TID), or TID_ERROR if execution fails.
+ */
 pid_t exec(const char *cmd_line) {
-  tid_t tid = TID_ERROR;
-  struct thread *cur = thread_current();
+  tid_t tid = TID_ERROR;                     // Initialize return value to error
+  struct thread *cur = thread_current();     // Get the currently running thread
 
-  // 1. 유저 포인터 유효성 검사
+  // 1. Validate the user-provided pointer to avoid illegal memory access
   if (!is_valid_ptr(cmd_line)) {
-    exit(-1);
+    exit(-1);                                // Terminate if the pointer is invalid
   }
 
-  // 2. 자식 로딩 상태 초기화
-  cur->child_load_status = 0;
+  // 2. Reset the load status before launching the child
+  cur->child_load_status = 0;                // 0 means "not yet loaded"
 
-  // 3. 동기화 위해 락 획득
+  // 3. Acquire the lock to synchronize with the child during loading
   lock_acquire(&cur->lock_child);
 
-  // 4. 자식 프로세스 실행
-  tid = process_execute(cmd_line);
+  // 4. Create a new thread (child process) with the given command line
+  tid = process_execute(cmd_line);           // This also triggers start_process()
 
-  // 5. 자식 로딩 완료까지 기다림
+  // 5. Wait until the child process either loads successfully or fails
   while (cur->child_load_status == 0)
-    cond_wait(&cur->cond_child, &cur->lock_child);
+    cond_wait(&cur->cond_child, &cur->lock_child);  // Sleep until the child signals
 
-  // 6. 로딩 실패 시
+  // 6. Check the load status. If -1, child failed to load.
   if (cur->child_load_status == -1)
-    tid = TID_ERROR;
+    tid = TID_ERROR;                         // Return error if child load failed
 
-  // 7. 락 해제
+  // 7. Release the lock now that loading has finished
   lock_release(&cur->lock_child);
 
-  return tid;
+  return tid;                                // Return child TID or error
 }
 
+/*
+ * Waits for the child process with the given PID to exit.
+ * Returns the exit status of the child, or -1 on failure.
+ */
 int wait(pid_t pid) {
-  return process_wait(pid);
+  return process_wait(pid);  // Delegate to process_wait() implementation
 }
 
+/*
+ * Creates a new file with the given name and initial size.
+ * Returns true if the file was created successfully, false otherwise.
+ */
 bool create(const char* file_name, unsigned size) {  
+  // 1. Validate the file name pointer to ensure it's in user space
   if (!is_valid_ptr((const void *)file_name))
-    fail_invalid_access();
+    fail_invalid_access();   // Kill the process if the pointer is invalid
 
+  // 2. Acquire the file system lock before modifying shared resources
   lock_acquire(&filesys_lock);
+
+  // 3. Attempt to create the file
   bool return_code = filesys_create(file_name, size);
+
+  // 4. Release the file system lock after the operation
   lock_release(&filesys_lock);
-  return return_code;
+
+  return return_code;   // Return the result of the creation operation
 }
 
+/*
+ * Removes a file with the given name from the file system.
+ * Returns true if the file was removed successfully, false otherwise.
+ */
 bool remove(const char* file_name) {
+  // 1. Validate the file name pointer
   if (!is_valid_ptr((const void *)file_name))
-    fail_invalid_access();
+    fail_invalid_access();   // Kill the process on invalid access
 
+  // 2. Acquire lock to ensure mutual exclusion
   lock_acquire(&filesys_lock);
+
+  // 3. Attempt to remove the file
   bool return_code = filesys_remove(file_name);
+
+  // 4. Release the lock after operation
   lock_release(&filesys_lock);
-  return return_code;
+
+  return return_code;  // Return the result of the remove operation
 }
 
+/*
+ * Opens a file with the given name and returns its file descriptor.
+ * Returns -1 if the file cannot be opened or allocation fails.
+ */
 int open(const char* file_name) {
+  // 1. Validate the user-provided file name pointer
   if (!is_valid_ptr(file_name))
-    fail_invalid_access();
+    fail_invalid_access();   // Exit the process on invalid pointer
 
+  // 2. Acquire file system lock to access shared file table
   lock_acquire(&filesys_lock);
+
+  // 3. Try to open the file using the file system
   struct file* file_opened = filesys_open(file_name);
-  if (!file_opened) {
+  if (!file_opened) {                    // If open failed
     lock_release(&filesys_lock);
     return -1;
   }
 
+  // 4. Allocate a page for file descriptor structure
   struct file_descriptor* fd = palloc_get_page(0);
   if (!fd) {
-    file_close(file_opened);
+    file_close(file_opened);            // Free the opened file if allocation failed
     lock_release(&filesys_lock);
     return -1;
   }
 
-  fd->file_struct = file_opened;
-  fd->fd_num = allocate_fd();
-  fd->owner = thread_current()->tid;
+  // 5. Fill the file descriptor structure
+  fd->file_struct = file_opened;                 // Store the file pointer
+  fd->fd_num = allocate_fd();                    // Assign a new file descriptor number
+  fd->owner = thread_current()->tid;             // Set the owner thread
 
+  // 6. Add the file descriptor to the current thread's list
   list_push_back(&thread_current()->file_descriptors, &fd->elem);
+
+  // 7. Release the file system lock
   lock_release(&filesys_lock);
-  return fd->fd_num;
+
+  return fd->fd_num;    // Return the assigned file descriptor number
 }
 
+/*
+ * Returns the size of the file associated with the given file descriptor.
+ * Returns -1 if the file descriptor is invalid.
+ */
 int filesize(int fd) {
+  // 1. Acquire the file system lock to access shared file table
   lock_acquire(&filesys_lock);
 
+  // 2. Get the file descriptor structure associated with fd
   struct file_descriptor* file_d = get_open_file(fd);
-  if(file_d == NULL) {
+  if(file_d == NULL) {                  // If the fd is invalid or not open
     lock_release(&filesys_lock);
     return -1;
   }
 
+  // 3. Get the file length using the file system API
   int length = file_length(file_d->file_struct);
+
+  // 4. Release the lock after reading
   lock_release(&filesys_lock);
-  return length;
+
+  return length;                        // Return the file size in bytes
 }
 
+/*
+ * Reads data from the given file descriptor into the provided buffer.
+ * Returns the number of bytes read, or -1 on failure.
+ * Supports reading from stdin (fd == 0).
+ */
 int read(int fd, void *buffer, unsigned size) {
+  // 1. Validate the buffer pointer and its last byte
   if (!is_valid_ptr(buffer) || !is_valid_ptr((uint8_t *)buffer + size - 1)) {
-    fail_invalid_access();
+    fail_invalid_access();             // Terminate on invalid memory access
   }
 
+  // 2. Acquire file system lock
   lock_acquire(&filesys_lock);
 
+  // 3. Deny reading from stdout
   if (fd == 1) {
-    // stdout은 읽기 불가능
     lock_release(&filesys_lock);
     return -1;
   }
 
-  if(fd == 0) { // stdin
+  // 4. If reading from stdin, get characters from keyboard input
+  if(fd == 0) {
     unsigned i;
     for(i = 0; i < size; ++i) {
-      ((uint8_t *)buffer)[i] = input_getc();
+      ((uint8_t *)buffer)[i] = input_getc();   // Read one character at a time
     }
     lock_release(&filesys_lock);
-    return size;
+    return size;                               // Return number of bytes read
   }
-  
+
+  // 5. For regular files, retrieve the open file
   struct file_descriptor* file_d = get_open_file(fd);
   if(file_d && file_d->file_struct) {
-    int bytes_read = file_read(file_d->file_struct, buffer, size);
+    int bytes_read = file_read(file_d->file_struct, buffer, size); // Read from file
     lock_release(&filesys_lock);
     return bytes_read;
   }
 
+  // 6. If file not found or invalid
   lock_release(&filesys_lock);
   return -1;
 }
 
+/*
+ * Writes data from the given buffer to the file or stdout.
+ * Returns the number of bytes written, or -1 on failure.
+ * Denies writing to stdin (fd == 0).
+ */
 int write(int fd, const void *buffer, unsigned size) {
   unsigned i;
+
+  // 1. Validate every byte in the buffer to ensure safe access
   for (i = 0; i < size; i++) {
     if (!is_valid_ptr((const uint8_t *)buffer + i))
-      fail_invalid_access();
+      fail_invalid_access();           // Abort on invalid memory
   }
 
+  // 2. Acquire file system lock
   lock_acquire(&filesys_lock);
 
+  // 3. Writing to stdin is not allowed
   if (fd == 0) {
     lock_release(&filesys_lock);
     return -1;
   }
 
+  // 4. Writing to stdout: use putbuf
   if(fd == 1) {
-    putbuf(buffer, size);
+    putbuf(buffer, size);             // Output directly to screen
     lock_release(&filesys_lock);
     return size;
   }
-  
+
+  // 5. For regular files, retrieve file descriptor and write
   struct file_descriptor* file_d = get_open_file(fd);
   int result = -1;
   if (file_d && file_d->file_struct)
-    result = file_write(file_d->file_struct, buffer, size);
-    
+    result = file_write(file_d->file_struct, buffer, size);  // Write to file
+
+  // 6. Release lock and return result
   lock_release(&filesys_lock);
   return result;
 }
 
+/*
+ * Moves the file pointer of the file descriptor to a specified position.
+ */
 void seek(int fd, unsigned position) {
+  // 1. Acquire the file system lock for thread-safe access
   lock_acquire(&filesys_lock);
 
+  // 2. Retrieve the file descriptor structure associated with fd
   struct file_descriptor* file_d = get_open_file(fd);
+
+  // 3. If the file is valid, move the file pointer
   if(file_d && file_d->file_struct)
-    file_seek(file_d->file_struct, position);
-  
+    file_seek(file_d->file_struct, position);  // Update the file's current position
+
+  // 4. Release the lock
   lock_release(&filesys_lock);
 }
 
+/*
+ * Returns the current file pointer position for the given file descriptor.
+ * Returns 0 if the file is invalid.
+ */
 unsigned tell(int fd) {
-  unsigned result = 0;
+  unsigned result = 0;  // Default return value if file is invalid
 
+  // 1. Acquire file system lock
   lock_acquire(&filesys_lock);
 
+  // 2. Get the file descriptor structure for fd
   struct file_descriptor* file_d = get_open_file(fd);
-  if(file_d && file_d->file_struct)
-    return file_tell(file_d->file_struct);
 
+  // 3. If the file is valid, retrieve current file position
+  if(file_d && file_d->file_struct)
+    return file_tell(file_d->file_struct);  // Return without releasing lock (intentional in PintOS)
+
+  // 4. Release lock if file was invalid
   lock_release(&filesys_lock);
-  return result;
+
+  return result;  // Return default value (0)
 }
 
+/*
+ * Closes the open file associated with the given file descriptor.
+ * Removes the file descriptor from the thread’s list and releases resources.
+ */
 void close(int fd) {
+  // 1. Acquire file system lock
   lock_acquire(&filesys_lock);
+
+  // 2. Close and clean up the open file descriptor
   close_open_file(fd);
+
+  // 3. Release the lock after cleanup
   lock_release(&filesys_lock);
 }
 
 
 /****************** Helper Functions on Memory Access ********************/
 
-static int32_t
-get_user (const uint8_t *uaddr) {
-  // check that a user pointer `uaddr` points below PHYS_BASE
+/*
+ * Safely reads a byte from the user virtual address `uaddr`.
+ * Returns the byte value (0–255) if successful, or -1 if the address is invalid.
+ */
+static int32_t get_user (const uint8_t *uaddr) {
+  // Check if the user address is below PHYS_BASE (i.e., in user space)
   if (! ((void*)uaddr < PHYS_BASE)) {
-    return -1; // invalid memory access
+    return -1;  // Address is outside user space → invalid access
   }
 
-  // as suggested in the reference manual, see (3.1.5)
   int result;
+
+  // Inline assembly to safely read from user memory
+  // If memory access fails, jump to label `1` and return value is unchanged
   asm ("movl $1f, %0; movzbl %1, %0; 1:"
-      : "=&a" (result) : "m" (*uaddr));
-  return result;
+       : "=&a" (result)   // Output: result in register EAX
+       : "m" (*uaddr));   // Input: memory at user address
+
+  return result;  // Return the loaded byte value or error
 }
   
-bool
-is_valid_ptr(const void *usr_ptr)
+/*
+ * Checks whether a given user pointer is valid.
+ * Returns true if the pointer is non-null, in user address space,
+ * and mapped to a valid physical page.
+ */
+bool is_valid_ptr(const void *usr_ptr)
 {
-  struct thread *cur = thread_current();
+  struct thread *cur = thread_current();  // Get current thread
 
-  // 1. NULL 포인터 검사
+  // 1. Check for NULL pointer
   if (usr_ptr == NULL)
     return false;
 
-  // 2. 사용자 공간에 속한 주소인지 검사
+  // 2. Check if the address is within user virtual address space
   if (!is_user_vaddr(usr_ptr))
     return false;
 
-  // 3. 해당 주소가 실제로 매핑된 유효한 페이지인지 확인
+  // 3. Check if the virtual address is mapped to a physical page
   if (pagedir_get_page(cur->pagedir, usr_ptr) == NULL)
     return false;
 
-  return true;
+  return true;  // All checks passed
 }
 
-static struct file_descriptor*
-get_open_file(int fd_num)
+/*
+ * Retrieves the open file descriptor structure for a given file descriptor number.
+ * Returns NULL if the descriptor is not found or refers to stdin/stdout/stderr.
+ */
+static struct file_descriptor* get_open_file(int fd_num)
 {
-  struct thread *t = thread_current();
-  ASSERT(t != NULL);
+  struct thread *t = thread_current();  // Get current thread
+  ASSERT(t != NULL);                    // Sanity check
 
+  // Standard input/output/error are not managed with file_descriptor
   if (fd_num < 3) {
-    return NULL; // 0, 1, 2는 stdin, stdout, stderr
+    return NULL;
   }
 
+  // Search the thread's file_descriptors list
   struct list_elem *e;
   for (e = list_begin(&t->file_descriptors);
        e != list_end(&t->file_descriptors);
        e = list_next(e))
   {
-    struct file_descriptor *desc = list_entry(e, struct file_descriptor, elem);
+    struct file_descriptor *desc = list_entry(e, struct file_descriptor, elem); // Get current descriptor
     if (desc->fd_num == fd_num) {
-      return desc;
+      return desc;  // Match found
     }
   }
 
-  return NULL;
+  return NULL;  // Not found
 }
 
-int
-allocate_fd(void) 
+/*
+ * Allocates and returns the next available file descriptor number
+ * for the current thread.
+ */
+int allocate_fd(void) 
 {
-  struct thread *cur = thread_current();
-  return cur->next_fd++;
+  struct thread *cur = thread_current();  // Get current thread
+  return cur->next_fd++;                  // Return and increment next available fd
 }
 
-void
-close_open_file(int fd_num) 
+/*
+ * Closes and deallocates the file descriptor with the given number.
+ * Also removes it from the current thread's file descriptor list.
+ */
+void close_open_file(int fd_num) 
 {
-  struct list *fd_list = &thread_current()->file_descriptors;
+  struct list *fd_list = &thread_current()->file_descriptors;  // Get current thread's fd list
   struct list_elem *e;
 
+  // Iterate through the list of open file descriptors
   for (e = list_begin(fd_list); e != list_end(fd_list); e = list_next(e)) {
-    struct file_descriptor *desc = list_entry(e, struct file_descriptor, elem);
+    struct file_descriptor *desc = list_entry(e, struct file_descriptor, elem);  // Access file descriptor
     if (desc->fd_num == fd_num) {
-      file_close(desc->file_struct);
-      list_remove(e);
-      palloc_free_page(desc);
+      file_close(desc->file_struct);   // Close the associated file
+      list_remove(e);                  // Remove the descriptor from the list
+      palloc_free_page(desc);         // Free the memory used for descriptor
       return;
     }
   }
