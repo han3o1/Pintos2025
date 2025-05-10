@@ -20,42 +20,62 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void argument_pushing(char **parse, int cnt, void **esp);
+void argument_stack(const char* argv[], int argc, void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *cmdline)
+process_execute (const char *file_name)
 {
-  char *cmdline_copy, *file_name;
+  char *file_name_copy, *exec_name;
   char *save_ptr;
   tid_t tid;
 
   /* Make a copy of CMD_LINE.
      Otherwise there's a race between the caller and load(). */
-  cmdline_copy = palloc_get_page (0);
-  if (cmdline_copy == NULL) return TID_ERROR;
-  strlcpy (cmdline_copy, cmdline, PGSIZE);
+  file_name_copy = palloc_get_page (0);
+  if (file_name_copy == NULL) return TID_ERROR;
+  strlcpy (file_name_copy, file_name, PGSIZE);
 
   // Extract file_name from cmdline. Should make a copy.
-  file_name = palloc_get_page (0);
-  if (file_name == NULL) {
-    palloc_free_page (cmdline_copy); /* don't leak */
+  exec_name = palloc_get_page (0);
+  if (exec_name == NULL) {
+    palloc_free_page (file_name_copy); /* don't leak */
     return TID_ERROR;
   }
-  strlcpy (file_name, cmdline, PGSIZE);
-  file_name = strtok_r(file_name, " ", &save_ptr);
+  strlcpy (exec_name, file_name, PGSIZE);
+  exec_name = strtok_r(exec_name, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, cmdline_copy);
+  tid = thread_create (exec_name, PRI_DEFAULT, start_process, file_name_copy);
 
   if (tid == TID_ERROR)
   {
-    palloc_free_page (file_name);
-    palloc_free_page (cmdline_copy);
+    palloc_free_page (exec_name);
+    palloc_free_page (file_name_copy);
+    return TID_ERROR;
   }
+
+  #ifdef USERPROG
+  // 자식 관리 구조체 생성 및 초기화
+  struct child_status *child = calloc(1, sizeof(struct child_status));
+  if (child == NULL)
+    return TID_ERROR;
+
+  child->tid = tid;
+  child->exit_status = -1;
+  child->exited = false;
+  child->has_been_waited = false;
+
+  // 부모의 자식 리스트에 등록
+  struct thread *cur = thread_current();
+  list_push_back(&cur->children, &child->elem);
+#endif
+
+  palloc_free_page(exec_name); // exec_name은 더 이상 필요 없으므로 해제
+
   return tid;
 }
 
@@ -82,11 +102,20 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-  argument_pushing(&tmp, cnt, &if_.esp); // pushing arguments into stack
+  argument_stack((const char **)tmp, cnt, &if_.esp); // pushing arguments into stack
 
-  // DEBUG
-#ifdef DEBUG
-  hex_dump(if_.esp, if_.esp, PHYS_BASE - if_.esp, true);
+  struct thread *t = thread_current();
+  t->next_fd = 3;
+
+  #ifdef USERPROG
+  // 부모에게 로딩 상태 전달
+  struct thread *parent = get_thread_by_id(t->parent_id);
+  if (parent != NULL) {
+    lock_acquire(&parent->lock_child);
+    parent->child_load_status = success ? 1 : -1;
+    cond_signal(&parent->cond_child, &parent->lock_child);
+    lock_release(&parent->lock_child);
+  }
 #endif
 
   /* If load failed, quit. */
@@ -114,16 +143,47 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED)
+process_wait (tid_t child_tid)
 {
-  // TODO : this is unimplemented version yet,
-  // but process_wait should block the process for a while
-  // to prevent the pintos kernel from shutting down.
-  int dummy = 0, i;
-  for(i=0; i<7 * 10000 * 10000; ++i) dummy += i;
-  ASSERT(dummy != 0);
+  struct thread *cur = thread_current();
+  struct list_elem *e;
+  struct child_status *cs = NULL;
+  int exit_status = -1;
 
-  return -1;
+  // 1. 자식 리스트에서 child_tid에 해당하는 자식 찾기
+  for (e = list_begin(&cur->children); e != list_end(&cur->children); e = list_next(e)) {
+    struct child_status *entry = list_entry(e, struct child_status, elem);
+    if (entry->tid == child_tid) {
+      cs = entry;
+      break;
+    }
+  }
+
+  // 2. 자식이 없다면 실패
+  if (cs == NULL)
+    return -1;
+
+  // 3. 이미 기다렸던 자식이면 실패
+  if (cs->has_been_waited)
+    return -1;
+
+  cs->has_been_waited = true;
+
+  // 4. 자식이 아직 종료되지 않았다면 기다림
+  lock_acquire(&cur->lock_child);
+  while (!cs->exited) {
+    cond_wait(&cur->cond_child, &cur->lock_child);
+  }
+
+  // 5. 자식의 종료 상태를 받아옴
+  exit_status = cs->exit_status;
+  lock_release(&cur->lock_child);
+
+  // 6. 자식 정보 리스트에서 제거하고 메모리 해제
+  list_remove(&cs->elem);
+  free(cs);
+
+  return exit_status;
 }
 
 /* Free the current process's resources. */
@@ -132,6 +192,41 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* 1. 자식 리스트 정리 */
+  struct list_elem *e, *next;
+  for (e = list_begin(&cur->children); e != list_end(&cur->children); e = next) {
+    next = list_next(e);
+    struct child_status *child = list_entry(e, struct child_status, elem);
+    list_remove(e);
+    free(child); // 자식 상태 메모리 해제
+  }
+
+  /* 2. 실행 중인 파일 쓰기 허용 및 닫기 */
+  if (cur->exec_file != NULL) {
+    file_allow_write(cur->exec_file);
+    file_close(cur->exec_file);
+    cur->exec_file = NULL;
+  }
+
+  /* 3. 부모에게 종료 상태 통보 */
+  if (cur->parent_id != TID_ERROR) {
+    struct thread *parent = get_thread_by_id(cur->parent_id);
+    if (parent != NULL) {
+      lock_acquire(&parent->lock_child);
+      struct list_elem *e;
+      for (e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)) {
+        struct child_status *child = list_entry(e, struct child_status, elem);
+        if (child->tid == cur->tid) {
+          child->exit_status = cur->exit_status;  // exit()에서 설정되었을 것
+          child->exited = true;
+          cond_signal(&parent->cond_child, &parent->lock_child);
+          break;
+        }
+      }
+      lock_release(&parent->lock_child);
+    }
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -343,11 +438,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
+  /* Deny writes to executables. */
+  file_deny_write(file);
+  thread_current()->executing_file = file;
+
   success = true;
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 
@@ -459,21 +557,21 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
-static void
-argument_pushing (char** parse, int argc, void **esp)
+void
+argument_stack(const char* argv[], int argc, void **esp)
 {
   int i;
-  int len=0;
+  int len = 0;
   int argv_addr[argc];
   for (i = 0; i < argc; i++) {
-    len = strlen(parse[i]) + 1;
+    len = strlen(argv[i]) + 1;
     *esp -= len;
-    memcpy(*esp, parse[i], len);
-    argv_addr[i] = (int) *esp;
+    memcpy(*esp, argv[i], len);
+    argv_addr[i] = (int)*esp;
   }
 
   // word align
-  *esp = (int)*esp & 0xfffffffc;
+  *esp = (void *)((int)*esp & 0xfffffffc);
 
   // last null
   *esp -= 4;
@@ -485,20 +583,18 @@ argument_pushing (char** parse, int argc, void **esp)
     *(int*)*esp = argv_addr[i];
   }
 
-  //setting **argv
+  // setting **argv
   *esp -= 4;
   *(int*)*esp = (int)*esp + 4;
 
-  //setting argc
+  // setting argc
   *esp -= 4;
   *(int*)*esp = argc;
 
-  //setting ret
-  *esp-=4;
+  // setting ret
+  *esp -= 4;
   *(int*)*esp = 0;
-
 }
-
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */

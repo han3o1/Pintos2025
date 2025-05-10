@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -228,6 +229,11 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
+#ifdef USERPROG
+  /* 현재 스레드를 부모로 설정 */
+  t->parent_id = thread_current()->tid;
+#endif
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -595,6 +601,19 @@ init_thread (struct thread *t, const char *name, int priority)
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+
+#ifdef USERPROG
+  list_init(&t->file_descriptors);
+  t->executing_file = NULL;
+
+  /* 부모-자식 구조 관련 필드 초기화 */
+  t->parent_id = TID_ERROR;           // 일단 초기값은 TID_ERROR로 설정
+  t->child_load_status = 0;           // 아직 load 전
+  lock_init(&t->lock_child);
+  cond_init(&t->cond_child);
+  list_init(&t->children);
+  t->exec_file = NULL;
+#endif
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -724,6 +743,25 @@ comparator_greater_thread_priority (
   return ta->priority > tb->priority;
 }
 
+struct thread *get_thread_by_id(tid_t tid) {
+  struct list_elem *e;
+
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
+    struct thread *t = list_entry(e, struct thread, allelem);
+    if (t->tid == tid)
+      return t;
+  }
+
+  return NULL; // 못 찾으면 NULL 반환
+}
+
+void thread_yield_on_return(void) {
+  if (intr_context()) {
+    intr_yield_on_return();  // interrupt context에서는 예약만
+  } else {
+    thread_yield();          // thread context에서는 즉시 yield
+  }
+}
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
