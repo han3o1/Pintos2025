@@ -56,6 +56,16 @@ process_execute (const char *file_name)
   strlcpy (exec_name, file_name, PGSIZE);
   exec_name = strtok_r(exec_name, " ", &save_ptr);
 
+  /*
+   *  - Allocate memory for child_status to track this child process.
+   */
+  struct child_status *child = calloc(1, sizeof(struct child_status));
+  if (child == NULL) {
+    palloc_free_page (file_name_copy);
+    palloc_free_page (exec_name);
+    return TID_ERROR;
+  }
+
   /* 
    * 2. Create a new thread:
    *    - Create a new thread using thread_create()
@@ -75,16 +85,11 @@ process_execute (const char *file_name)
 
 #ifdef USERPROG
   // Allocate and initialize a child_status struct for the new child thread.
-  struct child_status *child = calloc(1, sizeof(struct child_status));
-  if (child == NULL)
-    return TID_ERROR;
-
   child->tid = tid;  // Set the child's thread ID
   child->exit_status = -1;  // Default exit status
   child->exited = false;  // Child has not exited yet
   child->has_been_waited = false; // Not yet waited by parent
 
-  // 부모의 자식 리스트에 등록
   struct thread *cur = thread_current();
   list_push_back(&cur->children, &child->elem);  // Add child to current thread's child list
 #endif
@@ -100,7 +105,14 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char* tmp[50];  // To store parsed arguments (argv)
+  /*
+   * Allocate a page to store argument pointers (argv).
+   * Avoids large stack allocations, which is safer under OOM conditions.
+   */
+  char **tmp = palloc_get_page(0);
+  if (tmp == NULL)
+    thread_exit();  // out-of-memory handling
+  
   char* token;   // Current token from command line
   char* save_ptr;  // Pointer used by strtok_r
   int cnt = 0;  // Argument count (argc)
@@ -131,11 +143,10 @@ start_process (void *file_name_)
 
   /*
    * 3. Load the executable file:
-   * - Pass the first token (program name) to load()
+   * - Use the first token (program name) to call load()
    * - If successful, prepare the user stack with argument_stack()
    */
-  success = load (file_name, &if_.eip, &if_.esp);  // load "bin/ls", for example
-  argument_stack((const char **)tmp, cnt, &if_.esp);  // pushing arguments into stack
+  success = load (tmp[0], &if_.eip, &if_.esp);
 
   struct thread *t = thread_current();
   t->next_fd = 3;  // File descriptors 0, 1, 2 are reserved (stdin, stdout, stderr)
@@ -145,8 +156,17 @@ start_process (void *file_name_)
   struct thread *parent = get_thread_by_id(t->parent_id);
   if (parent != NULL) {
     lock_acquire(&parent->lock_child);
-    parent->child_load_status = success ? 1 : -1;
-    cond_signal(&parent->cond_child, &parent->lock_child);
+
+    // Push arguments onto the user stack only if load succeeded
+    // Prevents stack manipulation on a failed load
+    if (success) {
+      argument_stack((const char **)tmp, cnt, &if_.esp);
+      parent->child_load_status = 1;  // Indicate success
+      palloc_free_page(tmp);
+    }
+    else
+      parent->child_load_status = -1;  // Indicate failure
+    cond_signal(&parent->cond_child, &parent->lock_child);  // Wake up parent
     lock_release(&parent->lock_child);
   }
 #endif
@@ -480,6 +500,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Deny writes to executables. */
   file_deny_write(file);
   thread_current()->executing_file = file;
+  thread_current()->exec_file = file; // Used in process_exit() to allow write and close
 
   success = true;
 
