@@ -4,9 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-
-/* MLFQ - Type for fixed-point arithmetic (used in MLFQ calculations) */
-typedef int fixed_point_t;
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -92,31 +90,61 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    /* priority scheduling - Priority donation support */
-    int init_priority; // Original (non-donated) priority of the thread
-    struct lock *wait_on_lock; // Lock the thread is currently waiting on
-    struct list donations; // List of threads that have donated their priority
-    struct list_elem donation_elem; // List element for the donation list
+    int original_priority;              /* Priority, before donation */
     struct list_elem allelem;           /* List element for all threads list. */
+    struct list_elem waitelem;          /* List element, stored in the wait_list queue */
+    int64_t sleep_endtick;              /* The tick after which the thread should awake (if the thread is in sleep) */
 
     /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+    struct list_elem elem;              /* List element, stored in the ready_list queue */
 
-    /* alarm clock - Tick at which the thread should be woken up (for alarm clock). */
-    int64_t wakeup_tick;
-
-    int nice; /* MLFQ - Nice value of the thread (affects priority in MLFQ) */
-    fixed_point_t recent_cpu; /* MLFQ - Estimated CPU usage (used for priority calculation) */
+    // needed for priority donations
+    struct lock *waiting_lock;          /* The lock object on which this thread is waiting (or NULL if not locked) */
+    struct list locks;                  /* List of locks the thread holds (for multiple donations) */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct list file_descriptors;       /* List of file_descriptors the thread contains */
+    struct file *executing_file;        /* The executable file of associated process. */
+    int next_fd;
+
+    /* Process hierarchy support */
+    tid_t parent_id;                   /* Parent thread id */
+    int child_load_status;             /* -1: load failed, 0: not yet loaded, 1: load success */
+    
+    struct lock lock_child;            /* Lock for child-related sync */
+    struct condition cond_child;       /* Condition variable for child loading and waiting */
+    
+    struct list children;              /* List of child processes (struct child_status) */
+    
+    struct file *exec_file;            /* The executable file (can be same as executing_file or used differently) */
+
+    int exit_status;  // Used to store process's exit status for process_exit
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
     struct file *fd_table[FD_MAX];
   };
+
+#ifdef USERPROG
+/* Child status structure for process_wait/exit. */
+struct child_status
+{
+  tid_t tid;                       /* Child TID */
+  int exit_status;                 /* Exit status of the child */
+  bool exited;                     /* Whether the child has exited */
+  bool has_been_waited;            /* Whether parent has already waited */
+  struct list_elem elem;           /* Element for parent's children list */
+};
+
+// Optional helper function to find thread by tid.
+struct thread *get_thread_by_id(tid_t tid);
+
+// Request a context switch after returning from the current function or interrupt
+void thread_yield_on_return(void);
+#endif
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -126,7 +154,7 @@ extern bool thread_mlfqs;
 void thread_init (void);
 void thread_start (void);
 
-void thread_tick (void);
+void thread_tick (int64_t tick);
 void thread_print_stats (void);
 
 typedef void thread_func (void *aux);
@@ -134,6 +162,8 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
+
+void thread_sleep_until (int64_t wake_tick);
 
 struct thread *thread_current (void);
 tid_t thread_tid (void);
@@ -153,18 +183,5 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-
-/* alarm clock - Puts the current thread to sleep until wakeup_tick. */
-void thread_sleep (int64_t wakeup_tick);
-/* alarm clock - Wakes up all threads whose wakeup_tick <= current_tick. */
-void thread_wakeup (int64_t current_tick);
-
-/* priority scheduling - Compares two threads' priorities (used to sort ready and waiters list) */
-bool thread_priority_cmp (const struct list_elem *a, const struct list_elem *b, void *aux);
- 
-/* Donates the current thread's priority to lock holders if needed */
-void donate_priority (void);
-/* Restores the thread's priority from init_priority, considering remaining donations */
-void refresh_priority (void);
 
 #endif /* threads/thread.h */

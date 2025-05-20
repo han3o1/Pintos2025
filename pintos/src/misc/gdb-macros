@@ -138,3 +138,15 @@ end
 document debugpintos
     Attach debugger to pintos process
 end
+
+define show-mem-bitmap
+	printf "Kernel :\n"
+	x/12x kernel_pool.used_map.bits
+	printf "User :\n"
+	x/12x user_pool.used_map.bits
+	printf "Swap :\n"
+	x/32x swap.used_map.bits
+end
+document debugpintos
+    Print memory bitmap info
+end
