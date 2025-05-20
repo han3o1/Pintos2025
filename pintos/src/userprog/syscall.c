@@ -7,13 +7,12 @@
 #include "threads/palloc.h"
 #include <stdio.h>
 #include <syscall-nr.h>
-#include "threads/interrupt.h" 
+#include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 #include "lib/kernel/list.h"
 
-typedef uint32_t pid_t;
 static void syscall_handler (struct intr_frame *);
 
 static int32_t get_user (const uint8_t *uaddr);
