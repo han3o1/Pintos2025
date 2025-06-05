@@ -18,6 +18,8 @@ static struct lock frame_lock;
 /* A mapping from physical address to frame table entry. */
 static struct hash frame_map;
 
+static struct hash frame_table;
+
 /* A (circular) list of frames for the clock eviction algorithm. */
 static struct list frame_list;      /* the list */
 static struct list_elem *clock_ptr; /* the pointer in clock algorithm */
@@ -47,13 +49,8 @@ static struct frame_table_entry* pick_frame_to_evict(uint32_t* pagedir);
 static void vm_frame_do_free (void *kpage, bool free_page);
 
 
-void
-vm_frame_init ()
-{
-  lock_init (&frame_lock);
-  hash_init (&frame_map, frame_hash_func, frame_less_func, NULL);
-  list_init (&frame_list);
-  clock_ptr = NULL;
+void frame_table_init(void) {
+  vm_frame_init();
 }
 
 /**
@@ -118,12 +115,12 @@ vm_frame_allocate (enum palloc_flags flags, void *upage)
 /**
  * Deallocate a frame or page.
  */
-void
-vm_frame_free (void *kpage)
-{
-  lock_acquire (&frame_lock);
-  vm_frame_do_free (kpage, true);
-  lock_release (&frame_lock);
+void frame_free(void *kpage) {
+  vm_frame_free(kpage);
+}
+
+void* frame_allocate(enum palloc_flags flags, void *upage) {
+  return vm_frame_allocate(flags, upage);
 }
 
 /**
@@ -235,10 +232,9 @@ vm_frame_unpin (void* kpage) {
 }
 
 void
-vm_frame_pin (void* kpage) {
-  vm_frame_set_pinned (kpage, true);
+frame_set_pinned (void* kpage, bool pinned) {
+  vm_frame_set_pinned(kpage, pinned);
 }
-
 
 /* Helpers */
 
