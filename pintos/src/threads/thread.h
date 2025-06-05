@@ -4,7 +4,10 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-#include "threads/synch.h"
+
+#ifdef VM
+#include "vm/page.h"
+#endif
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -104,45 +107,37 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+
+    // Project 2: file descriptors and process table
+    /* Owned by userprog/process.c and userprog/syscall.c */
+
+    struct process_control_block *pcb;  /* Process Control Block */
+    struct list child_list;             /* List of children processes of this thread,
+                                          each elem is defined by pcb#elem */
+
     struct list file_descriptors;       /* List of file_descriptors the thread contains */
+
     struct file *executing_file;        /* The executable file of associated process. */
-    int next_fd;
 
-    /* Process hierarchy support */
-    tid_t parent_id;                   /* Parent thread id */
-    int child_load_status;             /* -1: load failed, 0: not yet loaded, 1: load success */
-    
-    struct lock lock_child;            /* Lock for child-related sync */
-    struct condition cond_child;       /* Condition variable for child loading and waiting */
-    
-    struct list children;              /* List of child processes (struct child_status) */
-    
-    struct file *exec_file;            /* The executable file (can be same as executing_file or used differently) */
-
-    int exit_status;  // Used to store process's exit status for process_exit
+    uint8_t *current_esp;               /* The current value of the user program’s stack pointer.
+                                           A page fault might occur in the kernel, so we might
+                                           need to store esp on transition to kernel mode. (4.3.3) */
 #endif
+
+#ifdef VM
+    // Project 3: Supplemental page table.
+    struct supplemental_page_table *supt;   /* Supplemental Page Table. */
+
+    // Project 3: Memory Mapped Files.
+    struct list mmap_list;              /* List of struct mmap_desc. */
+#endif
+
+    // Project 4: CWD.
+    struct dir *cwd;
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
-
-#ifdef USERPROG
-/* Child status structure for process_wait/exit. */
-struct child_status
-{
-  tid_t tid;                       /* Child TID */
-  int exit_status;                 /* Exit status of the child */
-  bool exited;                     /* Whether the child has exited */
-  bool has_been_waited;            /* Whether parent has already waited */
-  struct list_elem elem;           /* Element for parent's children list */
-};
-
-// Optional helper function to find thread by tid.
-struct thread *get_thread_by_id(tid_t tid);
-
-// Request a context switch after returning from the current function or interrupt
-void thread_yield_on_return(void);
-#endif
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -176,6 +171,7 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+void thread_priority_donate(struct thread *, int priority);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
