@@ -5,52 +5,31 @@
 #include <hash.h>
 #include "filesys/off_t.h"
 
-/**
- * Indicates a state of page.
- */
 enum page_status {
-  ALL_ZERO,         // All zeros
-  ON_FRAME,         // Actively in memory
-  ON_SWAP,          // Swapped (on swap slot)
-  FROM_FILESYS      // from filesystem (or executable)
+  ALL_ZERO,
+  ON_FRAME,
+  ON_SWAP,
+  FROM_FILESYS
 };
 
-/**
- * Supplemental page table. The scope is per-process.
- */
 struct supplemental_page_table
   {
-    /* The hash table, page -> spte */
     struct hash page_map;
   };
 
 struct supplemental_page_table_entry
   {
-    void *upage;              /* Virtual address of the page (the key) */
-    void *kpage;              /* Kernel page (frame) associated to it.
-                                 Only effective when status == ON_FRAME.
-                                 If the page is not on the frame, should be NULL. */
+    void *upage;
+    void *kpage;
     struct hash_elem elem;
-
     enum page_status status;
-
-    bool dirty;               /* Dirty bit. */
-
-    // for ON_SWAP
-    swap_index_t swap_index;  /* Stores the swap index if the page is swapped out.
-                                 Only effective when status == ON_SWAP */
-
-    // for FROM_FILESYS
+    bool dirty;
+    swap_index_t swap_index;
     struct file *file;
     off_t file_offset;
     uint32_t read_bytes, zero_bytes;
     bool writable;
   };
-
-
-/*
- * Methods for manipulating supplemental page tables.
- */
 
 struct supplemental_page_table* vm_supt_create (void);
 void vm_supt_destroy (struct supplemental_page_table *);
