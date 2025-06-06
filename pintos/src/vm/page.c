@@ -247,7 +247,7 @@ static bool vm_load_page_from_filesys(struct supplemental_page_table_entry *spte
     return false;
 
   ASSERT (spte->read_bytes + spte->zero_bytes == PGSIZE);
-  memset (kpage + n_read, 0, spte->zero_bytes);
+  //memset (kpage + n_read, 0, spte->zero_bytes);
   return true;
 }
 
