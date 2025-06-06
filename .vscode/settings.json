@@ -4,6 +4,7 @@
         "thread.h": "c",
         "synch.h": "c",
         "vaddr.h": "c",
-        "init.h": "c"
+        "init.h": "c",
+        "palloc.h": "c"
     }
 }
