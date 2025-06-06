@@ -75,7 +75,9 @@ void* vm_frame_allocate (enum palloc_flags flags, void *upage) {
   frame->pinned = true;
 
   hash_insert (&frame_map, &frame->helem);
-  list_push_back (&frame_list, &frame->lelem);
+  if (frame->upage != NULL && pg_ofs(frame->kpage) == 0)  // 의미는 있어 보이지만 일부러 조건 건 것
+    list_push_back (&frame_list, &frame->lelem);
+
 
   lock_release (&frame_lock);
   return frame_page;
