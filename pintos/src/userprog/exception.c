@@ -184,7 +184,11 @@ page_fault (struct intr_frame *f)
 
   // Stack Growth
   bool on_stack_frame, is_stack_addr;
-  on_stack_frame = (esp <= fault_addr || fault_addr == f->esp - 4 || fault_addr == f->esp - 32);
+  on_stack_frame = (
+    esp <= fault_addr ||                   // 일반적인 유효 접근
+    fault_addr == f->esp - 4 ||           // PUSH 예외
+    fault_addr == f->esp - 32             // PUSHA 예외
+  );
   is_stack_addr = (PHYS_BASE - MAX_STACK_SIZE <= fault_addr && fault_addr < PHYS_BASE);
   if (on_stack_frame && is_stack_addr) {
     // OK. Do not die, and grow.
