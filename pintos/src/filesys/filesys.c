@@ -1,4 +1,5 @@
 #include "threads/thread.h"
+#include "threads/synch.h"
 #include "filesys/filesys.h"
 #include "filesys/cache.h"
 #include <debug.h>

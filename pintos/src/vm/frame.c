@@ -48,8 +48,10 @@ void* vm_frame_allocate (enum palloc_flags flags, void *upage) {
     ASSERT (f_evicted != NULL && f_evicted->t != NULL);
 
     ASSERT (f_evicted->t->pagedir != (void*)0xcccccccc);
-    pagedir_clear_page(f_evicted->t->pagedir, f_evicted->upage);
-
+    if (pagedir_is_accessed(f_evicted->t->pagedir, f_evicted->upage)) {
+      pagedir_clear_page(f_evicted->t->pagedir, f_evicted->upage);
+    }
+    
     bool is_dirty = false;
     is_dirty = is_dirty || pagedir_is_dirty(f_evicted->t->pagedir, f_evicted->upage);
     is_dirty = is_dirty || pagedir_is_dirty(f_evicted->t->pagedir, f_evicted->kpage);
@@ -75,9 +77,8 @@ void* vm_frame_allocate (enum palloc_flags flags, void *upage) {
   frame->pinned = true;
 
   hash_insert (&frame_map, &frame->helem);
-  if (frame->upage != NULL && pg_ofs(frame->kpage) == 0)  // 의미는 있어 보이지만 일부러 조건 건 것
-    list_push_back (&frame_list, &frame->lelem);
-
+  if (frame->upage != NULL && pg_ofs(frame->kpage) == 0 && is_user_vaddr(frame->upage))
+  list_push_back(&frame_list, &frame->lelem);
 
   lock_release (&frame_lock);
   return frame_page;
