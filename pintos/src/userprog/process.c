@@ -338,7 +338,7 @@ process_exit (void)
   // Important: All the frames held by this thread should ALSO be freed
   // (see the destructor of SPTE). Otherwise an access to frame with
   // its owner thread had been died will result in fault.
-  vm_supt_destroy (cur->supt);
+  vm_spt_destroy (cur->supt);
   cur->supt = NULL;
 #endif
 
@@ -654,7 +654,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       struct thread *curr = thread_current ();
       ASSERT (pagedir_get_page(curr->pagedir, upage) == NULL); // no virtual page yet?
 
-      if (! vm_supt_install_filesys(curr->supt, upage,
+      if (! vm_spt_install_filesys(curr->supt, upage,
             file, ofs, page_read_bytes, page_zero_bytes, writable) ) {
         return false;
       }
@@ -740,24 +740,41 @@ push_arguments (const char* cmdline_tokens[], int argc, void **esp)
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
-static bool
-setup_stack (void **esp)
-{
-  uint8_t *kpage;
-  bool success = false;
-
-  // upage address is the first segment of stack.
-  kpage = vm_frame_allocate (PAL_USER | PAL_ZERO, PHYS_BASE - PGSIZE);
-  if (kpage != NULL)
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        vm_frame_free (kpage);
-    }
-  return success;
-}
+   bool
+   setup_stack(void **esp) {
+     // ❶ 사용자 스택 시작 주소는 PHYS_BASE - PGSIZE
+     void *upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
+   
+   #ifdef VM
+     // ❷ VM 기능이 켜져 있으면 프레임 할당
+     void *kpage = vm_frame_allocate(PAL_USER, upage);
+     if (kpage == NULL)
+       return false;
+   
+     // ❸ 페이지 디렉토리에 매핑
+     if (!install_page(upage, kpage, true)) {
+       vm_frame_free(kpage);
+       return false;
+     }
+   
+     // ❹ SPT에 등록 (필요 시)
+     vm_supt_install_frame(thread_current()->supt, upage, kpage);
+   #else
+     // VM 미사용 시 물리 메모리에서 직접 할당
+     uint8_t *kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+     if (kpage == NULL)
+       return false;
+   
+     if (!install_page(upage, kpage, true)) {
+       palloc_free_page(kpage);
+       return false;
+     }
+   #endif
+   
+     // ❺ 스택 포인터 초기화
+     *esp = PHYS_BASE;
+     return true;
+   }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
    virtual address KPAGE to the page table.

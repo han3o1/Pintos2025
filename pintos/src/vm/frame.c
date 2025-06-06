@@ -5,6 +5,7 @@
 #include "lib/kernel/list.h"
 
 #include "vm/frame.h"
+#include "vm/page.h"
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"

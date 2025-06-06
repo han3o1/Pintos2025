@@ -6,6 +6,7 @@
 #include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/vaddr.h"
+#include "threads/thread.h"
 #include "userprog/pagedir.h"
 #include "vm/page.h"
 #include "vm/frame.h"
@@ -15,6 +16,57 @@ static unsigned spte_hash_func(const struct hash_elem *elem, void *aux);
 static bool     spte_less_func(const struct hash_elem *, const struct hash_elem *, void *aux);
 static void     spte_destroy_func(struct hash_elem *elem, void *aux);
 
+bool
+vm_load_page (void *fault_addr) {
+    struct thread *t = thread_current();
+    struct supplemental_page_table_entry *spte = vm_supt_lookup(t->supt, fault_addr);
+    if (spte == NULL)
+        return false;
+
+    // 2. 프레임 할당
+    void *kpage = vm_frame_allocate(PAL_USER, spte->upage);
+    if (kpage == NULL)
+        return false;
+
+    // 3. spte->type에 따라 어떤 방식으로 로딩할지 결정
+    bool success = false;
+    switch (spte->type) {
+        case VM_BIN:
+            success = load_segment_from_file(spte, kpage); // 파일에서 읽어오기
+            break;
+        case VM_SWAP:
+            success = vm_swap_in(spte->swap_index, kpage);
+            break;
+        case VM_ANON:
+            memset(kpage, 0,PGSIZE);
+            success = true;
+            break;
+    }
+
+    if (!success) {
+        vm_frame_free(kpage);
+        return false;
+    }
+
+    // 4. 페이지 디렉토리에 매핑
+    if (!install_page(spte->upage, kpage, spte->writable)) {
+      return false;
+    }
+
+    // 5. Unpin
+    vm_frame_unpin(kpage);
+    return true;
+}
+
+bool install_page(void *upage, void *kpage, bool writable) {
+  struct thread *t = thread_current();
+
+  if (!pagedir_set_page(t->pagedir, upage, kpage, writable)) {
+      vm_frame_free(kpage);
+      return false;
+  }
+  return true;
+}
 
 struct supplemental_page_table*
 vm_supt_create (void)
@@ -27,7 +79,7 @@ vm_supt_create (void)
 }
 
 void
-vm_supt_destroy (struct supplemental_page_table *supt)
+vm_spt_destroy (struct supplemental_page_table *supt)
 {
   ASSERT (supt != NULL);
 
@@ -116,7 +168,7 @@ vm_supt_set_swap (struct supplemental_page_table *supt, void *page, swap_index_t
  * on the supplemental page table, of type FROM_FILESYS.
  */
 bool
-vm_supt_install_filesys (struct supplemental_page_table *supt, void *upage,
+vm_spt_install_filesys (struct supplemental_page_table *supt, void *upage,
     struct file * file, off_t offset, uint32_t read_bytes, uint32_t zero_bytes, bool writable)
 {
   struct supplemental_page_table_entry *spte;
@@ -166,7 +218,7 @@ vm_supt_has_entry (struct supplemental_page_table *supt, void *page)
 {
   /* Find the SUPT entry. If not found, it is an unmanaged page. */
   struct supplemental_page_table_entry *spte = vm_supt_lookup(supt, page);
-  if(spte == NULL) return false;
+  if (spte == NULL) return false;
 
   return true;
 }
@@ -182,80 +234,6 @@ vm_supt_set_dirty (struct supplemental_page_table *supt, void *page, bool value)
 }
 
 static bool vm_load_page_from_filesys(struct supplemental_page_table_entry *, void *);
-
-/**
- * Load the page, specified by the address `upage`, back into the memory.
- */
-bool
-vm_load_page(struct supplemental_page_table *supt, uint32_t *pagedir, void *upage)
-{
-  /* see also userprog/exception.c */
-
-  // 1. Check if the memory reference is valid
-  struct supplemental_page_table_entry *spte;
-  spte = vm_supt_lookup(supt, upage);
-  if(spte == NULL) {
-    return false;
-  }
-
-  if(spte->status == ON_FRAME) {
-    // already loaded
-    return true;
-  }
-
-  // 2. Obtain a frame to store the page
-  void *frame_page = vm_frame_allocate(PAL_USER, upage);
-  if(frame_page == NULL) {
-    return false;
-  }
-
-  // 3. Fetch the data into the frame
-  bool writable = true;
-  switch (spte->status)
-  {
-  case ALL_ZERO:
-    memset (frame_page, 0, PGSIZE);
-    break;
-
-  case ON_FRAME:
-    /* nothing to do */
-    break;
-
-  case ON_SWAP:
-    // Swap in: load the data from the swap disc
-    vm_swap_in (spte->swap_index, frame_page);
-    break;
-
-  case FROM_FILESYS:
-    if( vm_load_page_from_filesys(spte, frame_page) == false) {
-      vm_frame_free(frame_page);
-      return false;
-    }
-
-    writable = spte->writable;
-    break;
-
-  default:
-    PANIC ("unreachable state");
-  }
-
-  // 4. Point the page table entry for the faulting virtual address to the physical page.
-  if(!pagedir_set_page (pagedir, upage, frame_page, writable)) {
-    vm_frame_free(frame_page);
-    return false;
-  }
-
-  // Make SURE to mapped kpage is stored in the SPTE.
-  spte->kpage = frame_page;
-  spte->status = ON_FRAME;
-
-  pagedir_set_dirty (pagedir, frame_page, false);
-
-  // unpin frame
-  vm_frame_unpin(frame_page);
-
-  return true;
-}
 
 bool
 vm_supt_mm_unmap(
