@@ -131,6 +131,10 @@ sema_up (struct semaphore *sema)
   }
 
   intr_set_level (old_level);
+
+  // Yield on return if needed (deferred yield)
+  if (target != NULL && target->priority > thread_current()->priority)
+    thread_yield_on_return();
 }
 
 static void sema_test_helper (void *sema_);
@@ -413,7 +417,7 @@ cond_broadcast (struct condition *cond, struct lock *lock)
 /* Helpers */
 
 static bool
-comparator_greater_thread_priority(const struct list_elem* a, const struct list_elem *b, void* aux UNUSED)
+comparator_greater_thread_priority(const struct list_elem* a, const struct list_elem *b, void* aux)
 {
   const struct thread* x = list_entry(a, struct thread, elem);
   const struct thread* y = list_entry(b, struct thread, elem);
@@ -422,7 +426,7 @@ comparator_greater_thread_priority(const struct list_elem* a, const struct list_
 }
 
 static bool
-comparator_greater_lock_priority(const struct list_elem* a, const struct list_elem *b, void* aux UNUSED)
+comparator_greater_lock_priority(const struct list_elem* a, const struct list_elem *b, void* aux)
 {
   const struct lock* x = list_entry(a, struct lock, lockelem);
   const struct lock* y = list_entry(b, struct lock, lockelem);
@@ -431,7 +435,7 @@ comparator_greater_lock_priority(const struct list_elem* a, const struct list_el
 }
 
 static bool
-comparator_greater_sema_priority(const struct list_elem* a, const struct list_elem *b, void* aux UNUSED)
+comparator_greater_sema_priority(const struct list_elem* a, const struct list_elem *b, void* aux)
 {
   const struct semaphore_elem* x = list_entry(a, struct semaphore_elem, elem);
   const struct semaphore_elem* y = list_entry(b, struct semaphore_elem, elem);

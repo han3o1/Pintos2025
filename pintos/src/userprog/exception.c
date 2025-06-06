@@ -98,7 +98,7 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
-      sys_exit (-1); // terminate. no more wait, parent
+      exit (-1); // terminate. no more wait, parent
 
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
@@ -113,7 +113,7 @@ kill (struct intr_frame *f)
          kernel. */
       printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
              f->vec_no, intr_name (f->vec_no), f->cs);
-      sys_exit (-1); // terminate. no more wait, parent
+      exit (-1); // terminate. no more wait, parent
     }
 }
 
@@ -158,30 +158,19 @@ page_fault (struct intr_frame *f)
   user = (f->error_code & PF_U) != 0;
 
 #if VM
-  /* Virtual memory handling.
-   * First, bring in the page to which fault_addr refers. */
-  struct thread *curr = thread_current(); /* Current thread. */
+  struct thread *curr = thread_current();
   void* fault_page = (void*) pg_round_down(fault_addr);
 
   if (!not_present) {
-    // attempt to write to a read-only region is always killed.
     goto PAGE_FAULT_VIOLATED_ACCESS;
   }
 
-  /* (4.3.3) Obtain the current value of the user program's stack pointer.
-   * If the page fault is from user mode, we can obtain from intr_frame `f`,
-   * but we cannot from kernel mode. We've stored the current esp
-   * at the beginning of system call into the thread for this case. */
   void* esp = user ? f->esp : curr->current_esp;
 
-  // Stack Growth
   bool on_stack_frame, is_stack_addr;
   on_stack_frame = (esp <= fault_addr || fault_addr == f->esp - 4 || fault_addr == f->esp - 32);
   is_stack_addr = (PHYS_BASE - MAX_STACK_SIZE <= fault_addr && fault_addr < PHYS_BASE);
   if (on_stack_frame && is_stack_addr) {
-    // OK. Do not die, and grow.
-    // we need to add new page entry in the SPT, if there was no page entry in the SPT.
-    // A promising choice is assign a new zero-page.
     if (vm_spt_has_entry(curr->spt, fault_page) == false)
       vm_spt_install_zeropage (curr->spt, fault_page);
   }
@@ -190,26 +179,32 @@ page_fault (struct intr_frame *f)
     goto PAGE_FAULT_VIOLATED_ACCESS;
   }
 
-  // success
   return;
-
 
 PAGE_FAULT_VIOLATED_ACCESS:
 #endif
+
   /* (3.1.5) a page fault in the kernel merely sets eax to 0xffffffff
-   * and copies its former value into eip. see syscall.c:get_user() */
+   * and copies its former value into eip */
   if(!user) { // kernel mode
     f->eip = (void *) f->eax;
     f->eax = 0xffffffff;
     return;
   }
 
-  /* Page fault can't be handled - kill the process */
+  /* If the fault address is NULL or outside the user address space, terminate the process. */
+  if (fault_addr == NULL || !is_user_vaddr(fault_addr)) {
+    exit(-1);  // Kill the process if the address is invalid
+  }
+
+  /* To implement virtual memory, delete the rest of the function
+     body, and replace it with code that brings in the page to
+     which fault_addr refers. */
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+  exit (-1);  // Terminate process due to page fault
 }
 

@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -75,6 +76,8 @@ void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
 void thread_awake (int64_t current_tick);
+
+void thread_priority_donate(struct thread *, int priority);
 
 /* Helper (Auxiliary) functions */
 static bool comparator_greater_thread_priority
@@ -226,6 +229,11 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
+#ifdef USERPROG
+  /* Set parent thread ID */
+  t->parent_id = thread_current()->tid;
+#endif
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -588,6 +596,11 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
 
+  int i;
+  for (i = 0; i < FD_MAX; i++) {
+    t->fd_table[i] = NULL;
+  }
+
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
@@ -604,11 +617,15 @@ init_thread (struct thread *t, const char *name, int priority)
   intr_set_level (old_level);
 
 #ifdef USERPROG
-  // init process-related informations.
-  t->pcb = NULL;
-  list_init(&t->child_list);
-  list_init(&t->file_descriptors);
-  t->executing_file = NULL;
+  list_init(&t->file_descriptors);  // Initialize list for file descriptors
+  t->executing_file = NULL;  // Initialize currently executing file to NULL
+
+  t->parent_id = TID_ERROR;  // Set default parent thread ID      
+  t->child_load_status = 0;  // Initialize child load status         
+  lock_init(&t->lock_child);  // Initialize lock for parent-child sync
+  cond_init(&t->cond_child);  // Initialize condition variable for child
+  list_init(&t->children);  // Initialize child list
+  t->exec_file = NULL;  // Initialize exec_file to NULL
 #endif
 #ifdef VM
   list_init(&t->mmap_list);
@@ -732,7 +749,7 @@ allocate_tid (void)
 static bool
 comparator_greater_thread_priority (
     const struct list_elem *a,
-    const struct list_elem *b, void *aux UNUSED)
+    const struct list_elem *b, void *aux)
 {
   struct thread *ta, *tb;
   ASSERT (a != NULL);
@@ -742,6 +759,25 @@ comparator_greater_thread_priority (
   return ta->priority > tb->priority;
 }
 
+struct thread *get_thread_by_id(tid_t tid) {
+  struct list_elem *e;
+
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
+    struct thread *t = list_entry(e, struct thread, allelem);
+    if (t->tid == tid)
+      return t;
+  }
+
+  return NULL;
+}
+
+void thread_yield_on_return(void) {
+  if (intr_context()) {
+    intr_yield_on_return();  // Schedule a thread switch when returning from interrupt
+  } else {
+    thread_yield();          // Yield CPU immediately if in thread context
+  }
+}
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
