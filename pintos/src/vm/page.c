@@ -12,30 +12,30 @@
 #include "filesys/file.h"
 
 static unsigned spte_hash_func(const struct hash_elem *elem, void *aux);
-static bool     spte_less_func(const struct hash_elem *, const struct hash_elem *, void *aux);
-static void     spte_destroy_func(struct hash_elem *elem, void *aux);
+static bool spte_less_func(const struct hash_elem *, const struct hash_elem *, void *aux);
+static void spte_destroy_func(struct hash_elem *elem, void *aux);
 
 struct supplemental_page_table*
-vm_supt_create (void)
+vm_spt_create (void)
 {
-  struct supplemental_page_table *supt =
+  struct supplemental_page_table *spt =
     (struct supplemental_page_table*) malloc(sizeof(struct supplemental_page_table));
 
-  hash_init (&supt->page_map, spte_hash_func, spte_less_func, NULL);
-  return supt;
+  hash_init (&spt->page_map, spte_hash_func, spte_less_func, NULL);
+  return spt;
 }
 
 void
-vm_supt_destroy (struct supplemental_page_table *supt)
+vm_spt_destroy (struct supplemental_page_table *spt)
 {
-  ASSERT (supt != NULL);
+  ASSERT (spt != NULL);
 
-  hash_destroy (&supt->page_map, spte_destroy_func);
-  free (supt);
+  hash_destroy (&spt->page_map, spte_destroy_func);
+  free (spt);
 }
 
 bool
-vm_supt_install_frame (struct supplemental_page_table *supt, void *upage, void *kpage)
+vm_spt_install_frame (struct supplemental_page_table *spt, void *upage, void *kpage)
 {
   struct supplemental_page_table_entry *spte;
   spte = (struct supplemental_page_table_entry *) malloc(sizeof(struct supplemental_page_table_entry));
@@ -47,7 +47,7 @@ vm_supt_install_frame (struct supplemental_page_table *supt, void *upage, void *
   spte->swap_index = -1;
 
   struct hash_elem *prev_elem;
-  prev_elem = hash_insert (&supt->page_map, &spte->elem);
+  prev_elem = hash_insert (&spt->page_map, &spte->elem);
   if (prev_elem == NULL) {
     return true;
   }
@@ -58,7 +58,7 @@ vm_supt_install_frame (struct supplemental_page_table *supt, void *upage, void *
 }
 
 bool
-vm_supt_install_zeropage (struct supplemental_page_table *supt, void *upage)
+vm_spt_install_zeropage (struct supplemental_page_table *spt, void *upage)
 {
   struct supplemental_page_table_entry *spte;
   spte = (struct supplemental_page_table_entry *) malloc(sizeof(struct supplemental_page_table_entry));
@@ -69,18 +69,18 @@ vm_supt_install_zeropage (struct supplemental_page_table *supt, void *upage)
   spte->dirty = false;
 
   struct hash_elem *prev_elem;
-  prev_elem = hash_insert (&supt->page_map, &spte->elem);
+  prev_elem = hash_insert (&spt->page_map, &spte->elem);
   if (prev_elem == NULL) return true;
 
-  PANIC("Duplicated SUPT entry for zeropage");
+  PANIC("Duplicated spt entry for zeropage");
   return false;
 }
 
 bool
-vm_supt_set_swap (struct supplemental_page_table *supt, void *page, swap_index_t swap_index)
+vm_spt_set_swap (struct supplemental_page_table *spt, void *page, swap_index_t swap_index)
 {
   struct supplemental_page_table_entry *spte;
-  spte = vm_supt_lookup(supt, page);
+  spte = vm_spt_lookup(spt, page);
   if(spte == NULL) return false;
 
   spte->status = ON_SWAP;
@@ -90,7 +90,7 @@ vm_supt_set_swap (struct supplemental_page_table *supt, void *page, swap_index_t
 }
 
 bool
-vm_supt_install_filesys (struct supplemental_page_table *supt, void *upage,
+vm_spt_install_filesys (struct supplemental_page_table *spt, void *upage,
     struct file * file, off_t offset, uint32_t read_bytes, uint32_t zero_bytes, bool writable)
 {
   struct supplemental_page_table_entry *spte;
@@ -107,37 +107,37 @@ vm_supt_install_filesys (struct supplemental_page_table *supt, void *upage,
   spte->writable = writable;
 
   struct hash_elem *prev_elem;
-  prev_elem = hash_insert (&supt->page_map, &spte->elem);
+  prev_elem = hash_insert (&spt->page_map, &spte->elem);
   if (prev_elem == NULL) return true;
 
-  PANIC("Duplicated SUPT entry for filesys-page");
+  PANIC("Duplicated spt entry for filesys-page");
   return false;
 }
 
 struct supplemental_page_table_entry*
-vm_supt_lookup (struct supplemental_page_table *supt, void *page)
+vm_spt_lookup (struct supplemental_page_table *spt, void *page)
 {
   struct supplemental_page_table_entry spte_temp;
   spte_temp.upage = page;
 
-  struct hash_elem *elem = hash_find (&supt->page_map, &spte_temp.elem);
+  struct hash_elem *elem = hash_find (&spt->page_map, &spte_temp.elem);
   if(elem == NULL) return NULL;
   return hash_entry(elem, struct supplemental_page_table_entry, elem);
 }
 
 bool
-vm_supt_has_entry (struct supplemental_page_table *supt, void *page)
+vm_spt_has_entry (struct supplemental_page_table *spt, void *page)
 {
-  struct supplemental_page_table_entry *spte = vm_supt_lookup(supt, page);
+  struct supplemental_page_table_entry *spte = vm_spt_lookup(spt, page);
   if(spte == NULL) return false;
 
   return true;
 }
 
 bool
-vm_supt_set_dirty (struct supplemental_page_table *supt, void *page, bool value)
+vm_spt_set_dirty (struct supplemental_page_table *spt, void *page, bool value)
 {
-  struct supplemental_page_table_entry *spte = vm_supt_lookup(supt, page);
+  struct supplemental_page_table_entry *spte = vm_spt_lookup(spt, page);
   if (spte == NULL) PANIC("set dirty - the request page doesn't exist");
 
   spte->dirty = spte->dirty || value;
@@ -147,10 +147,10 @@ vm_supt_set_dirty (struct supplemental_page_table *supt, void *page, bool value)
 static bool vm_load_page_from_filesys(struct supplemental_page_table_entry *, void *);
 
 bool
-vm_load_page(struct supplemental_page_table *supt, uint32_t *pagedir, void *upage)
+vm_load_page(struct supplemental_page_table *spt, uint32_t *pagedir, void *upage)
 {
   struct supplemental_page_table_entry *spte;
-  spte = vm_supt_lookup(supt, upage);
+  spte = vm_spt_lookup(spt, upage);
   if(spte == NULL) {
     return false;
   }
@@ -207,11 +207,11 @@ vm_load_page(struct supplemental_page_table *supt, uint32_t *pagedir, void *upag
 }
 
 bool
-vm_supt_mm_unmap(
-    struct supplemental_page_table *supt, uint32_t *pagedir,
+vm_spt_mm_unmap(
+    struct supplemental_page_table *spt, uint32_t *pagedir,
     void *page, struct file *f, off_t offset, size_t bytes)
 {
-  struct supplemental_page_table_entry *spte = vm_supt_lookup(supt, page);
+  struct supplemental_page_table_entry *spte = vm_spt_lookup(spt, page);
   if(spte == NULL) {
     PANIC ("munmap - some page is missing; can't happen!");
   }
@@ -260,7 +260,7 @@ vm_supt_mm_unmap(
     PANIC ("unreachable state");
   }
 
-  hash_delete(& supt->page_map, &spte->elem);
+  hash_delete(& spt->page_map, &spte->elem);
   return true;
 }
 
@@ -279,10 +279,10 @@ static bool vm_load_page_from_filesys(struct supplemental_page_table_entry *spte
 }
 
 void
-vm_pin_page(struct supplemental_page_table *supt, void *page)
+vm_pin_page(struct supplemental_page_table *spt, void *page)
 {
   struct supplemental_page_table_entry *spte;
-  spte = vm_supt_lookup(supt, page);
+  spte = vm_spt_lookup(spt, page);
   if(spte == NULL) {
     return;
   }
@@ -292,10 +292,10 @@ vm_pin_page(struct supplemental_page_table *supt, void *page)
 }
 
 void
-vm_unpin_page(struct supplemental_page_table *supt, void *page)
+vm_unpin_page(struct supplemental_page_table *spt, void *page)
 {
   struct supplemental_page_table_entry *spte;
-  spte = vm_supt_lookup(supt, page);
+  spte = vm_spt_lookup(spt, page);
   if(spte == NULL) PANIC ("request page is non-existent");
 
   if (spte->status == ON_FRAME) {

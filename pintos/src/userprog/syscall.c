@@ -19,13 +19,6 @@
 #include "vm/page.h"
 #endif
 
-
-#ifdef DEBUG
-#define _DEBUG_PRINTF(...) printf(__VA_ARGS__)
-#else
-#define _DEBUG_PRINTF(...) /* do nothing */
-#endif
-
 static void syscall_handler (struct intr_frame *);
 
 static void check_user (const uint8_t *uaddr);
@@ -95,7 +88,6 @@ syscall_handler (struct intr_frame *f)
 
   // The system call number is in the 32-bit word at the caller's stack pointer.
   memread_user(f->esp, &syscall_number, sizeof(syscall_number));
-  _DEBUG_PRINTF ("[DEBUG] system call, number = %d!\n", syscall_number);
 
   // Store the esp, which is needed in the page fault handler.
   // refer to exception.c:page_fault() (see manual 4.3.3)
@@ -374,8 +366,6 @@ void sys_exit(int status) {
 }
 
 pid_t sys_exec(const char *cmdline) {
-  _DEBUG_PRINTF ("[DEBUG] Exec : %s\n", cmdline);
-
   // cmdline is an address to the character buffer, on user memory
   // so a validation check is required
   check_user((const uint8_t*) cmdline);
@@ -387,7 +377,6 @@ pid_t sys_exec(const char *cmdline) {
 }
 
 int sys_wait(pid_t pid) {
-  _DEBUG_PRINTF ("[DEBUG] Wait : %d\n", pid);
   return process_wait(pid);
 }
 
@@ -617,7 +606,7 @@ mmapid_t sys_mmap(int fd, void *upage) {
   size_t offset;
   for (offset = 0; offset < file_size; offset += PGSIZE) {
     void *addr = upage + offset;
-    if (vm_supt_has_entry(curr->supt, addr)) goto MMAP_FAIL;
+    if (vm_spt_has_entry(curr->spt, addr)) goto MMAP_FAIL;
   }
 
   // Now, map each page to filesystem
@@ -627,7 +616,7 @@ mmapid_t sys_mmap(int fd, void *upage) {
     size_t read_bytes = (offset + PGSIZE < file_size ? PGSIZE : file_size - offset);
     size_t zero_bytes = PGSIZE - read_bytes;
 
-    vm_supt_install_filesys(curr->supt, addr,
+    vm_spt_install_filesys(curr->spt, addr,
         f, offset, read_bytes, zero_bytes, /*writable*/true);
   }
 
@@ -672,7 +661,7 @@ bool sys_munmap(mmapid_t mid)
     for(offset = 0; offset < file_size; offset += PGSIZE) {
       void *addr = mmap_d->addr + offset;
       size_t bytes = (offset + PGSIZE < file_size ? PGSIZE : file_size - offset);
-      vm_supt_mm_unmap (curr->supt, curr->pagedir, addr, mmap_d->file, offset, bytes);
+      vm_spt_mm_unmap (curr->spt, curr->pagedir, addr, mmap_d->file, offset, bytes);
     }
 
     // Free resources, and remove from the list
@@ -819,25 +808,25 @@ find_mmap_desc(struct thread *t, mmapid_t mid)
 
 void preload_and_pin_pages(const void *buffer, size_t size)
 {
-  struct supplemental_page_table *supt = thread_current()->supt;
+  struct supplemental_page_table *spt = thread_current()->spt;
   uint32_t *pagedir = thread_current()->pagedir;
 
   void *upage;
   for(upage = pg_round_down(buffer); upage < buffer + size; upage += PGSIZE)
   {
-    vm_load_page (supt, pagedir, upage);
-    vm_pin_page (supt, upage);
+    vm_load_page (spt, pagedir, upage);
+    vm_pin_page (spt, upage);
   }
 }
 
 void unpin_preloaded_pages(const void *buffer, size_t size)
 {
-  struct supplemental_page_table *supt = thread_current()->supt;
+  struct supplemental_page_table *spt = thread_current()->spt;
 
   void *upage;
   for(upage = pg_round_down(buffer); upage < buffer + size; upage += PGSIZE)
   {
-    vm_unpin_page (supt, upage);
+    vm_unpin_page (spt, upage);
   }
 }
 

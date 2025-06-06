@@ -157,14 +157,6 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-#ifdef DEBUG
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-#endif
-
 #if VM
   /* Virtual memory handling.
    * First, bring in the page to which fault_addr refers. */
@@ -188,13 +180,13 @@ page_fault (struct intr_frame *f)
   is_stack_addr = (PHYS_BASE - MAX_STACK_SIZE <= fault_addr && fault_addr < PHYS_BASE);
   if (on_stack_frame && is_stack_addr) {
     // OK. Do not die, and grow.
-    // we need to add new page entry in the SUPT, if there was no page entry in the SUPT.
+    // we need to add new page entry in the SPT, if there was no page entry in the SPT.
     // A promising choice is assign a new zero-page.
-    if (vm_supt_has_entry(curr->supt, fault_page) == false)
-      vm_supt_install_zeropage (curr->supt, fault_page);
+    if (vm_spt_has_entry(curr->spt, fault_page) == false)
+      vm_spt_install_zeropage (curr->spt, fault_page);
   }
 
-  if(! vm_load_page(curr->supt, curr->pagedir, fault_page) ) {
+  if(! vm_load_page(curr->spt, curr->pagedir, fault_page) ) {
     goto PAGE_FAULT_VIOLATED_ACCESS;
   }
 
