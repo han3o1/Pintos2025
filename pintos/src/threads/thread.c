@@ -588,6 +588,11 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
 
+  int i;
+  for (i = 0; i < FD_MAX; i++) {
+    t->fd_table[i] = NULL;
+  }
+
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);

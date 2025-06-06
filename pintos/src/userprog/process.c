@@ -1,3 +1,4 @@
+#include "threads/thread.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 #include <debug.h>
@@ -257,6 +258,15 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
+  /* Close all open files */
+  int i;
+  for (i = 0; i < FD_MAX; i++) {
+    if (cur->fd_table[i] != NULL) {
+      file_close(cur->fd_table[i]);
+      cur->fd_table[i] = NULL;
+    }
+  }
+
   uint32_t *pd;
 
   /* Resources should be cleaned up */
