@@ -28,12 +28,6 @@
 #define vm_frame_free(x) palloc_free_page(x)
 #endif
 
-#ifdef DEBUG
-#define _DEBUG_PRINTF(...) printf(__VA_ARGS__)
-#else
-#define _DEBUG_PRINTF(...) /* do nothing */
-#endif
-
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 static void push_arguments (const char *[], int cnt, void **esp);
@@ -227,13 +221,10 @@ process_wait (tid_t child_tid)
 
   // if child process is not found, return -1 immediately
   if (child_pcb == NULL) {
-    _DEBUG_PRINTF("[DEBUG] wait(): child not found, pid = %d\n", child_tid);
     return -1;
   }
 
   if (child_pcb->waiting) {
-    // already waiting (the parent already called wait on child's pid)
-    _DEBUG_PRINTF("[DEBUG] wait(): child found, pid = %d, but it is already waiting\n", child_tid);
     return -1; // a process may wait for any fixed child at most once
   }
   else {
@@ -334,12 +325,12 @@ process_exit (void)
   }
 
 #ifdef VM
-  // Destroy the SUPT, its all SPTEs, all the frames, and swaps.
+  // Destroy the SPT, its all SPTEs, all the frames, and swaps.
   // Important: All the frames held by this thread should ALSO be freed
   // (see the destructor of SPTE). Otherwise an access to frame with
   // its owner thread had been died will result in fault.
-  vm_supt_destroy (cur->supt);
-  cur->supt = NULL;
+  vm_spt_destroy (cur->spt);
+  cur->spt = NULL;
 #endif
 
   /* Destroy the current process's page directory and switch back
@@ -462,7 +453,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Allocate and activate page directory, as well as SPTE. */
   t->pagedir = pagedir_create ();
 #ifdef VM
-  t->supt = vm_supt_create ();
+  t->spt = vm_spt_create ();
 #endif
 
   if (t->pagedir == NULL)
@@ -654,7 +645,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       struct thread *curr = thread_current ();
       ASSERT (pagedir_get_page(curr->pagedir, upage) == NULL); // no virtual page yet?
 
-      if (! vm_supt_install_filesys(curr->supt, upage,
+      if (! vm_spt_install_filesys(curr->spt, upage,
             file, ofs, page_read_bytes, page_zero_bytes, writable) ) {
         return false;
       }
@@ -778,7 +769,7 @@ install_page (void *upage, void *kpage, bool writable)
   bool success = (pagedir_get_page (t->pagedir, upage) == NULL);
   success = success && pagedir_set_page (t->pagedir, upage, kpage, writable);
 #ifdef VM
-  success = success && vm_supt_install_frame (t->supt, upage, kpage);
+  success = success && vm_spt_install_frame (t->spt, upage, kpage);
   if(success) vm_frame_unpin(kpage);
 #endif
   return success;
