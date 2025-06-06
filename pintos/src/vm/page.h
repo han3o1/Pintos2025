@@ -12,24 +12,22 @@ enum page_status {
   FROM_FILESYS
 };
 
-struct supplemental_page_table
-  {
-    struct hash page_map;
-  };
+struct supplemental_page_table {
+  struct hash page_map;
+};
 
-struct supplemental_page_table_entry
-  {
-    void *upage;
-    void *kpage;
-    struct hash_elem elem;
-    enum page_status status;
-    bool dirty;
-    swap_index_t swap_index;
-    struct file *file;
-    off_t file_offset;
-    uint32_t read_bytes, zero_bytes;
-    bool writable;
-  };
+struct supplemental_page_table_entry {
+  void *upage;
+  void *kpage;
+  struct hash_elem elem;
+  enum page_status status;
+  bool dirty;
+  swap_index_t swap_index;
+  struct file *file;
+  off_t file_offset;
+  uint32_t read_bytes, zero_bytes;
+  bool writable;
+};
 
 struct supplemental_page_table* vm_spt_create (void);
 void vm_spt_destroy (struct supplemental_page_table *);
