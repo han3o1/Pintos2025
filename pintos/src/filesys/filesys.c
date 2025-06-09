@@ -1,7 +1,4 @@
-#include "threads/thread.h"
-#include "threads/synch.h"
 #include "filesys/filesys.h"
-#include "filesys/cache.h"
 #include <debug.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,15 +6,11 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
-#include "filesys.h"
-
 
 /* Partition that contains the file system. */
 struct block *fs_device;
 
 static void do_format (void);
-/* Lock used to synchronize file system operations. */
-struct lock fs_lock;
 
 /* Initializes the file system module.
    If FORMAT is true, reformats the file system. */
@@ -30,7 +23,6 @@ filesys_init (bool format)
 
   inode_init ();
   free_map_init ();
-  lock_init(&fs_lock);
 
   if (format)
     do_format ();
@@ -45,11 +37,8 @@ filesys_done (void)
 {
   free_map_close ();
 }
-
-/* Creates a file or directory (set by `is_dir`) of
-   full path `path` with the given `initial_size`.
-   The path to file consists of two parts: path directory and filename.
-
+
+/* Creates a file named NAME with the given INITIAL_SIZE.
    Returns true if successful, false otherwise.
    Fails if a file named NAME already exists,
    or if internal memory allocation fails. */
@@ -100,7 +89,7 @@ filesys_remove (const char *name)
 
   return success;
 }
-
+
 /* Formats the file system. */
 static void
 do_format (void)

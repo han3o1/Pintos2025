@@ -43,7 +43,7 @@ void* vm_frame_allocate (enum palloc_flags flags, void *upage) {
 
   void *frame_page = palloc_get_page (PAL_USER | flags);
   if (frame_page == NULL) {
-    struct frame_table_entry *f_evicted = pick_frame_to_evict( thread_current()->pagedir );
+    struct frame_table_entry *f_evicted = pick_frame_to_evict( thread_current()->pagedir);
 
     ASSERT (f_evicted != NULL && f_evicted->t != NULL);
 

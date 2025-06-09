@@ -157,7 +157,7 @@ bool vm_load_page(struct supplemental_page_table *spt, uint32_t *pagedir, void *
     break;
 
   case FROM_FILESYS:
-    if( vm_load_page_from_filesys(spte, frame_page) == false) {
+    if (vm_load_page_from_filesys(spte, frame_page) == false) {
       vm_frame_free(frame_page);
       return false;
     }
